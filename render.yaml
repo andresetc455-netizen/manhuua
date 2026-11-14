@@ -2,14 +2,16 @@
 services:
   - type: web
     name: manhuua-backend
-    runtime: docker
+    runtime: docker            # Docker: NO usa Build Command ni Start Command
     dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Sin dockerCommand: se usa el CMD del Dockerfile (node /app/server/proxy.mjs).
     plan: free           # se duerme tras 15 min sin uso; "starter" queda siempre despierto
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: ALLOWED_ORIGINS   # ej.: https://manhuua.pages.dev,https://*.manhuua.pages.dev
-        sync: false
+      - key: ALLOWED_ORIGINS   # variable de entorno (no comando). Ej.: https://manhuua.pages.dev,https://*.manhuua.pages.dev
+        sync: false            # Render la pide al crear el Blueprint
       - key: RATE_LIMIT_PROXY
         value: "240"
       - key: RATE_LIMIT_RENDER

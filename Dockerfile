@@ -11,4 +11,5 @@ ENV NODE_ENV=production \
     PORT=10000
 USER pwuser
 EXPOSE 10000
-CMD ["node", "proxy.mjs"]
+# Arranca el servidor HTTP (proxy + /render + /health); render.mjs se carga desde proxy.mjs.
+CMD ["node", "/app/server/proxy.mjs"]
