@@ -4,9 +4,9 @@ import { analyze, fetchVia } from './sources/web.js';
 import { ensureSeries, saveChapter, updateSeries } from './library.js';
 import { setCover, autoCover, needsCover } from './covers.js';
 import { loadSettings } from './settings.js';
-import { byIndex, getAll } from './db.js';
-import { getExtension, seriesDetail } from './sources/extensions.js';
-import { followSeries } from './online.js';
+import { get, byIndex, getAll } from './db.js';
+import { getExtension, seriesDetail, chapterImages, isEnabled } from './sources/extensions.js';
+import { followSeries, seriesSources } from './online.js';
 
 const jobs = [];
 const subs = new Set();
@@ -19,7 +19,7 @@ export function useDownloads() {
   return j;
 }
 
-/** job: { url, series, title?, number?, images?, sourceUrl? } */
+/** job: { url, series, title?, number?, images?, sourceUrl?, seriesId?, extId? } */
 export function enqueue(list) {
   for (const x of [].concat(list)) {
     if (jobs.some((j) => j.url === x.url && j.status !== 'error' && j.status !== 'done')) continue;
@@ -54,11 +54,12 @@ async function isPage(blob) {
 async function process(job) {
   const set = (p) => { Object.assign(job, p); emit(); };
   set({ status: 'analizando' });
-  const series = await ensureSeries(job.series, job.sourceUrl ? { sourceUrl: job.sourceUrl } : {});
+  const series = (job.seriesId && (await get('series', job.seriesId))) || await ensureSeries(job.series, job.sourceUrl ? { sourceUrl: job.sourceUrl } : {});
   if (job.sourceUrl && !series.sourceUrl) await updateSeries(series.id, { sourceUrl: job.sourceUrl });
+  const httpRef = (u) => (/^https?:/.test(u || '') ? u : undefined);
   if (job.cover && needsCover(series)) {
     try {
-      await setCover(series.id, await fetchVia(job.cover, 'blob', job.sourceUrl || job.url), { provider: 'site', url: job.cover, link: job.sourceUrl });
+      await setCover(series.id, await fetchVia(job.cover, 'blob', httpRef(job.sourceUrl) || httpRef(job.url)), { provider: 'site', url: job.cover, link: job.sourceUrl });
       series.cover = true;
     } catch {}
   }
@@ -66,6 +67,7 @@ async function process(job) {
   if (existing.some((c) => c.url === job.url && !c.online)) return set({ status: 'omitido', error: 'Ya estaba descargado' });
 
   let { images, title, number } = job;
+  if (!images && /^mf:/.test(job.url)) images = await chapterImages(job.url, job.extId);
   if (!images) {
     const info = await analyze(job.url);
     if (info.kind !== 'chapter') throw new Error('No se encontraron páginas en la URL');
@@ -76,7 +78,7 @@ async function process(job) {
   const blobs = await pool(images, 4, async (u) => {
     let b = null;
     for (let t = 0; t < 3 && !b; t++) {
-      try { b = await fetchVia(u, 'blob', job.url); }
+      try { b = await fetchVia(u, 'blob', httpRef(job.url)); }
       catch (e) { if (t === 2 || [401, 403, 404, 410, 451].includes(e.status)) { console.warn(u, e.message); break; } } // sin reintentos si la fuente lo rechaza
     }
     set({ done: ++n });
@@ -86,7 +88,7 @@ async function process(job) {
   let pages = blobs.filter((b, i) => b && checks[i]);
   if (!pages.length) pages = blobs.filter(Boolean);
   if (!pages.length) throw new Error('No se pudo descargar ninguna imagen');
-  await saveChapter(series, { title, number, pages, url: job.url });
+  await saveChapter(series, { title, number, pages, url: job.url, sourceId: job.extId });
   set({ status: 'listo', missing: images.length - pages.length });
   if (loadSettings().coverAuto) autoCover(series.id).catch(() => {});
 }
@@ -108,11 +110,19 @@ async function run() {
 export async function checkUpdates(series) {
   if (!series.sourceUrl) return 0;
   if (series.online && series.extId) {
-    const ext = getExtension(series.extId);
-    if (!ext) throw new Error('La extensión de esta obra ya no existe');
-    const d = await seriesDetail(ext, series.sourceUrl, { title: series.title });
-    if (!d.chapters.length) throw new Error(d.diag?.reasons?.[0] || 'La fuente no devolvió capítulos');
-    return (await followSeries(ext, series.sourceUrl, d)).added;
+    // Todas las fuentes de la obra; una que falle (403, 404, sin conexión) no corta las demás.
+    let added = 0, ok = 0;
+    const errors = [];
+    for (const src of seriesSources(series)) {
+      const ext = getExtension(src.extId);
+      if (!ext) { errors.push(`${src.extName || 'fuente'}: la extensión ya no está instalada`); continue; }
+      if (!isEnabled(ext)) continue;
+      const d = await seriesDetail(ext, src.url, { title: series.title }).catch((e) => ({ chapters: [], diag: { reasons: [e.message] } }));
+      if (!d.chapters.length) { errors.push(`${ext.name}: ${d.diag?.reasons?.[0] || 'sin capítulos'}`); continue; }
+      added += (await followSeries(ext, src.url, d, { seriesId: series.id })).added; ok++;
+    }
+    if (!ok && errors.length) throw new Error(errors.join(' · '));
+    return added;
   }
   if (!/^https?:/.test(series.sourceUrl)) return 0;
   const info = await analyze(series.sourceUrl);

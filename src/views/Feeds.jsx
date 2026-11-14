@@ -1,8 +1,11 @@
 // Novedades, Historial, Explorar y Más (estructura tipo lector de manga con pestañas).
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useDb, getAll } from '../db.js';
 import { checkAllUpdates } from '../downloads.js';
-import { useExtensions, browse } from '../sources/extensions.js';
+import { useExtensions, isEnabled } from '../sources/extensions.js';
+import { searchAll } from '../sources/multi.js';
+import { groupWorks, onMergesChange, getMerges } from '../unify.js';
+import { stateOf } from './Extensions.jsx';
 import { Icon, Cover, Favicon, go } from '../ui.jsx';
 
 const DAY = 864e5;
@@ -109,56 +112,102 @@ export function History() {
   );
 }
 
+const SS = 'mh.browse';
+const ssGet = (k) => { try { return JSON.parse(sessionStorage.getItem(k)); } catch { return null; } };
+const ssSet = (k, v) => { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+/** Abre la ficha unificada de una obra agrupada. */
+export function openWork(w) {
+  ssSet('mh.work:' + w.key, { ...w, sources: w.sources.map((s) => ({ extId: s.ext.id, item: s.item, key: s.key })), maybe: w.maybe.map((m) => ({ key: m.key, title: m.title, extId: m.ext.id, mine: m.mine, item: m.item })) });
+  go(`/w/${encodeURIComponent(w.key)}`);
+}
+
 export function Browse({ onAdd }) {
-  const exts = useExtensions();
-  const [q, setQ] = useState('');
-  const [res, setRes] = useState(null);
-  const search = async (e) => {
-    e.preventDefault();
-    if (!q.trim()) return setRes(null);
-    setRes(exts.map((x) => ({ ext: x, state: 'loading', items: [] })));
-    await Promise.all(exts.map(async (x, i) => {
-      let r;
-      try { r = { ext: x, state: 'ok', items: (await browse(x, { query: q })).items }; } catch (err) { r = { ext: x, state: 'error', error: err.message, items: [] }; }
-      setRes((prev) => prev && prev.map((p, k) => (k === i ? r : p)));
-    }));
-  };
+  const all = useExtensions();
+  const exts = all.filter(isEnabled);
+  const saved = ssGet(SS);
+  const [q, setQ] = useState(saved?.q || '');
+  const [res, setRes] = useState(saved?.res || null); // [{extId, state, items, label, reason}]
+  const [mode, setMode] = useState(saved?.mode || '');
+  const [f, setF] = useState({ genre: '', status: '', source: '', sort: 'rel' });
+  const [, bump] = useState(0);
+  useEffect(() => onMergesChange(() => bump((n) => n + 1)), []);
+  useEffect(() => { if (res && !res.some((r) => r.state === 'loading')) ssSet(SS, { q, res, mode }); }, [res]); // eslint-disable-line
+  const run = (query) => { setMode(query ? 'search' : 'catalog'); setF({ genre: '', status: '', source: '', sort: 'rel' }); searchAll(exts, query, setRes); };
+  const search = (e) => { e.preventDefault(); if (!q.trim()) { setRes(null); sessionStorage.removeItem(SS); return; } run(q.trim()); };
+  const extById = (id) => all.find((x) => x.id === id);
+
+  const groups = useMemo(() => {
+    if (!res) return [];
+    const entries = res.flatMap((r) => { const x = extById(r.extId); return x ? r.items.map((item) => ({ ext: x, item })) : []; });
+    return groupWorks(entries);
+  }, [res, all, getMerges()]); // eslint-disable-line
+  const genres = [...new Set(groups.flatMap((g) => g.genres))].sort((a, b) => a.localeCompare(b));
+  const statuses = [...new Set(groups.map((g) => g.status).filter(Boolean))];
+  let shown = groups.filter((g) => (!f.genre || g.genres.includes(f.genre)) && (!f.status || g.status === f.status) && (!f.source || g.sources.some((s) => s.ext.id === f.source)));
+  if (f.sort === 'az') shown = [...shown].sort((a, b) => a.title.localeCompare(b.title, 'es'));
+  if (f.sort === 'upd') shown = [...shown].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  const loading = res?.some((r) => r.state === 'loading');
+
   return (
     <div className="page">
-      <header className="top"><h1>Explorar</h1><div className="actions"><button className="btn primary sm" onClick={onAdd}><Icon n="plus" size={16} /> Extensión</button></div></header>
-      <form className="search wide" onSubmit={search}>
-        <Icon n="search" size={16} />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Búsqueda global en todas las extensiones" enterKeyHint="search" />
+      <header className="top"><h1>Explorar</h1><div className="actions">
+        {exts.length > 0 && <button className="btn sm" onClick={() => { setQ(''); run(''); }}><Icon n="book" size={16} /> Catálogo unificado</button>}
+        <button className="btn primary sm" onClick={onAdd}><Icon n="plus" size={16} /> Extensión</button>
+      </div></header>
+      <form className="search wide big" onSubmit={search}>
+        <Icon n="search" size={18} />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Buscar en ${exts.length} fuentes a la vez`} enterKeyHint="search" />
+        {q && <button type="button" className="icon-btn" onClick={() => { setQ(''); setRes(null); sessionStorage.removeItem(SS); }} aria-label="Limpiar"><Icon n="x" size={16} /></button>}
       </form>
-      {res ? res.map((r) => (
-        <section key={r.ext.id}>
-          <h3 className="sec ext-sec"><Favicon ext={r.ext} /> {r.ext.name} {r.state === 'loading' && <span className="muted">· buscando…</span>}</h3>
-          {r.state === 'error' && <p className="error small">{r.error}</p>}
-          {r.state === 'ok' && !r.items.length && <p className="muted small">Sin resultados{!r.ext.searchUrl ? ' (configurá una URL de búsqueda en Ajustes para buscar en todo el sitio)' : ''}.</p>}
-          <div className="strip">
-            {r.items.map((it) => (
-              <a key={it.url} className="strip-item" href={`#/ext/${r.ext.id}/s/${encodeURIComponent(it.url)}`} onClick={() => sessionStorage.setItem('mh.pick', JSON.stringify(it))}>
-                <Cover src={it.cover} title={it.title} referer={r.ext.url} />
-                <span>{it.title}</span>
+      {res ? (
+        <>
+          <div className="src-strip">
+            {res.map((r) => { const x = extById(r.extId); if (!x) return null; return (
+              <span key={r.extId} className={'src-pill ' + r.state} title={r.reason || ''}>
+                <Favicon ext={x} /> {x.name}: {r.state === 'loading' ? 'buscando…' : r.state === 'ok' ? `${r.items.length} ${r.items.length === 1 ? 'obra' : 'obras'}` : r.label}
+              </span>); })}
+          </div>
+          {res.some((r) => r.state === 'error') && <p className="muted small">Las fuentes con error no afectan a las demás. Detalle en <a href="#/extensions">Extensiones</a>.</p>}
+          {groups.length > 0 && (
+            <div className="filters">
+              <select value={f.genre} onChange={(e) => setF({ ...f, genre: e.target.value })} aria-label="Género"><option value="">Todos los géneros</option>{genres.map((g) => <option key={g}>{g}</option>)}</select>
+              <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} aria-label="Estado"><option value="">Cualquier estado</option>{statuses.map((g) => <option key={g}>{g}</option>)}</select>
+              <select value={f.source} onChange={(e) => setF({ ...f, source: e.target.value })} aria-label="Fuente"><option value="">Todas las fuentes</option>{res.filter((r) => r.items.length).map((r) => <option key={r.extId} value={r.extId}>{extById(r.extId)?.name}</option>)}</select>
+              <select value={f.sort} onChange={(e) => setF({ ...f, sort: e.target.value })} aria-label="Orden"><option value="rel">Orden de las fuentes</option><option value="az">Alfabético</option><option value="upd">Últimas actualizaciones</option></select>
+              <span className="muted small">{shown.length} {shown.length === 1 ? 'obra' : 'obras'}{groups.length !== shown.length ? ` de ${groups.length}` : ''}</span>
+            </div>
+          )}
+          <div className="grid">
+            {shown.map((w) => (
+              <a key={w.key} className="card" href={`#/w/${encodeURIComponent(w.key)}`} onClick={(e) => { e.preventDefault(); openWork(w); }}>
+                <Cover src={w.cover} title={w.title} referer={w.sources[0].ext.url}>
+                  {w.sources.length > 1 && <span className="kind src-count">{w.sources.length} fuentes</span>}
+                </Cover>
+                <span className="card-title">{w.title}</span>
+                <span className="muted small card-sub">{[w.status, w.sources.map((s) => s.ext.name).join(', ')].filter(Boolean).join(' · ')}{w.maybe.length ? ' · posible duplicado' : ''}</span>
               </a>
             ))}
           </div>
-        </section>
-      )) : (
+          {loading && <p className="muted center">Consultando fuentes…</p>}
+          {!loading && !groups.length && <p className="empty">{mode === 'search' ? 'Ninguna fuente devolvió resultados.' : 'Las fuentes no devolvieron obras.'}</p>}
+        </>
+      ) : (
         <>
           <h3 className="sec">Extensiones</h3>
-          {!exts.length && <p className="muted">Agregá un sitio con el botón "Extensión" para navegar su catálogo.</p>}
+          {!all.length && <p className="muted">Agregá un sitio con el botón "Extensión" para navegar su catálogo.</p>}
           <ul className="ext-cards">
             {exts.map((x) => (
               <li key={x.id}>
                 <a href={`#/ext/${x.id}`}>
                   <Favicon ext={x} />
-                  <span className="grow"><b>{x.name}</b><span className="muted small">{new URL(x.url).hostname}{x.searchUrl ? ' · búsqueda' : ''}</span></span>
+                  <span className="grow"><b>{x.name}</b><span className="muted small">{new URL(x.url).hostname}{x.searchUrl ? ' · búsqueda' : ''} · {stateOf(x).label}</span></span>
                   <span className="btn sm">Abrir</span>
                 </a>
               </li>
             ))}
           </ul>
+          {all.length > exts.length && <p className="muted small">{all.length - exts.length} desactivadas · <a href="#/extensions">Gestionar</a></p>}
         </>
       )}
     </div>
@@ -174,6 +223,7 @@ export function More() {
       <header className="top more-head"><img src="./icon.svg" alt="" width="44" height="44" /><h1>Manhuua</h1></header>
       <ul className="ext-cards">
         {link('downloads', 'down', 'Descargas', 'Pegar URLs y ver la cola')}
+        {link('extensions', 'compass', 'Extensiones', 'Instalar, comprobar, activar y eliminar fuentes')}
         {link('settings', 'gear', 'Ajustes', 'Lector, tema, traducción, proxy y extensiones')}
       </ul>
     </div>

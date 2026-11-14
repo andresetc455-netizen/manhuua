@@ -20,7 +20,7 @@ export async function thumbnail(blob, W = 600, H = 900) {
 /** Busca (por título) o crea una serie. */
 export async function ensureSeries(title, extra = {}) {
   const all = await getAll('series');
-  const found = (extra.sourceUrl && all.find((s) => s.sourceUrl === extra.sourceUrl))
+  const found = (extra.sourceUrl && all.find((s) => s.sourceUrl === extra.sourceUrl || s.sources?.some((x) => x.url === extra.sourceUrl)))
     || all.find((s) => s.title.trim().toLowerCase() === title.trim().toLowerCase() && (s.source || 'local') === (extra.source || 'local'));
   if (found) return found;
   const s = { id: uid(), title: title.trim() || 'Sin título', favorite: false, addedAt: Date.now(), source: 'local', ...extra };
@@ -29,12 +29,12 @@ export async function ensureSeries(title, extra = {}) {
 }
 
 /** Guarda un capítulo con sus páginas (Blobs) en una serie. */
-export async function saveChapter(series, { title, number, pages, url }, { firstPageCover = true } = {}) {
+export async function saveChapter(series, { title, number, pages, url, sourceId }, { firstPageCover = true } = {}) {
   if (!pages.length) throw new Error('El capítulo no tiene imágenes');
   // Si el capítulo ya estaba "en línea" (sin descargar), se completa ese mismo registro: conserva
   // su id, el progreso de lectura y su lugar en la lista.
   const stub = url ? (await byIndex('chapters', 'seriesId', series.id)).find((c) => c.url === url) : null;
-  const ch = { ...(stub || {}), id: stub?.id || uid(), seriesId: series.id, title: title || stub?.title || `Capítulo ${number ?? ''}`.trim(), number: number ?? stub?.number ?? null, pageCount: pages.length, addedAt: stub?.addedAt || Date.now(), url, online: false, remotePages: null };
+  const ch = { ...(stub || {}), id: stub?.id || uid(), seriesId: series.id, title: title || stub?.title || `Capítulo ${number ?? ''}`.trim(), number: number ?? stub?.number ?? null, pageCount: pages.length, addedAt: stub?.addedAt || Date.now(), url, online: false, remotePages: null, ...(sourceId && !stub?.sourceId ? { sourceId } : {}) };
   const latest = (await get('series', series.id)) || series;
   const cover = latest.cover || !firstPageCover ? null : await thumbnail(pages[0]);
   await write(['chapters', 'pages', 'series'], (o) => {
@@ -61,7 +61,7 @@ export async function deleteChapter(id) {
   const ch = await get('chapters', id);
   const s = ch && (await get('series', ch.seriesId));
   // En obras en línea, borrar la descarga deja el capítulo disponible para leer en línea.
-  if (ch?.url && s?.online && !ch.online) {
+  if (ch?.url && (s?.online || ch.sourceId) && !ch.online) {
     await write(['chapters', 'pages'], (o) => { o.pages.delete(pageRange(id)); o.chapters.put({ ...ch, online: true, pageCount: null }); });
     return;
   }

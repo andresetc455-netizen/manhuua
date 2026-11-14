@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { getExtension, browse, seriesDetail } from '../sources/extensions.js';
+import { getExtension, browse, seriesDetail, isEnabled, recordStatus } from '../sources/extensions.js';
 import { activeProxy, usingPublicProxy } from '../sources/web.js';
+import { classify, ERROR_KINDS } from '../sources/engine.js';
 import { enqueue, useDownloads } from '../downloads.js';
 import { useDb, getAll, byIndex } from '../db.js';
 import { followSeries } from '../online.js';
@@ -15,7 +16,10 @@ export function DiagPanel({ ext, diag, open, onToggle, what = 'Obras' }) {
   if (!diag) return null;
   const ok = diag.attempts?.some((a) => a.ok) || diag.render?.html || diag.via === 'catalogo JSON';
   const rows = [
-    ['Extensión', `${ext.name} (${{ web: 'web', api: 'API JSON', catalog: 'catálogo JSON' }[ext.type] || ext.type})`],
+    ['Extensión', `${ext.name} (${{ web: 'web', api: 'API JSON', catalog: 'catálogo JSON', manifest: `extensión JSON v${ext.version}` }[ext.type] || ext.type})`],
+    (() => { const c = classify(diag); return ['Estado', c.label + (c.kind ? ` · ${ERROR_KINDS[c.kind]}` : '')]; })(),
+    diag.ms != null && ['Tiempo de respuesta', `${diag.ms} ms`],
+    diag.dropped > 0 && ['Descartados por validación', diag.dropped],
     ['URL', diag.url],
     diag.finalUrl && diag.finalUrl !== diag.url && ['Redirigida a', diag.finalUrl],
     ['Conexión', ok ? 'OK' : 'Falló'],
@@ -45,7 +49,7 @@ export function DiagPanel({ ext, diag, open, onToggle, what = 'Obras' }) {
   );
 }
 
-function DiagBox({ startOpen = false, ...p }) {
+export function DiagBox({ startOpen = false, ...p }) {
   const [open, setOpen] = useState(startOpen);
   return <DiagPanel {...p} open={open} onToggle={() => setOpen(!open)} />;
 }
@@ -70,10 +74,12 @@ export function ExtensionHome({ extId }) {
       setPage(r.nextPage ? r.nextPage - 1 : 1);
       setDiag(r.diag);
       setState('ok');
+      if (!append && !opts.query) recordStatus(ext, r.diag);
     } catch (e) { setErr(e.message); setState('error'); }
   };
-  useEffect(() => { ext && load(); }, [extId]); // eslint-disable-line
+  useEffect(() => { ext && isEnabled(ext) && load(); }, [extId]); // eslint-disable-line
   if (!ext) return <div className="page"><p className="empty">Extensión no encontrada.</p></div>;
+  if (!isEnabled(ext)) return <div className="page"><p className="empty">La extensión "{ext.name}" está desactivada. Activala en <a href="#/extensions">Extensiones</a>.</p></div>;
 
   return (
     <div className="page">
@@ -117,7 +123,7 @@ export function RemoteSeries({ extId, url }) {
   const jobs = useDownloads();
   // Estado local de esta obra: si ya está en la biblioteca, sus capítulos (descargados o en línea) y el progreso.
   const lib = useDb(async () => {
-    const series = (await getAll('series')).find((s) => s.sourceUrl === url) || null;
+    const series = (await getAll('series')).find((s) => s.sourceUrl === url || s.sources?.some((x) => x.url === url)) || null;
     const chapters = series ? await byIndex('chapters', 'seriesId', series.id) : [];
     const progress = series ? await byIndex('progress', 'seriesId', series.id) : [];
     return { series, byUrl: new Map(chapters.map((c) => [norm(c.url), c])), prog: new Map(progress.map((p) => [p.chapterId, p])) };
@@ -134,7 +140,12 @@ export function RemoteSeries({ extId, url }) {
   if (!ext) return <div className="page"><p className="empty">Extensión no encontrada.</p></div>;
 
   const queued = new Set(jobs.filter((j) => j.status !== 'error').map((j) => j.url));
-  const job = (c) => ({ url: c.url, title: c.title, number: c.number, images: c.images, series: lib?.series?.title || d.title, cover: d.cover, sourceUrl: url.startsWith('http') ? url : undefined });
+  const job = (c, seriesId) => ({ url: c.url, title: c.title, number: c.number, images: c.images, series: lib?.series?.title || d.title, cover: d.cover, sourceUrl: url.startsWith('http') ? url : undefined, extId: ext.id, seriesId });
+  // Descargar: la obra queda en la biblioteca vinculada a esta fuente (así no depende del título).
+  const download = async (list) => {
+    try { const { series } = await followSeries(ext, url, d, { seriesId: lib?.series?.id }); enqueue(list.map((c) => job(c, series.id))); }
+    catch (e) { setErr(e.message); }
+  };
   const local = (c) => lib?.byUrl.get(norm(c.url));
   const downloaded = (c) => { const l = local(c); return l && !l.online; };
   const pending = d ? d.chapters.filter((c) => !downloaded(c) && !queued.has(c.url)) : [];
@@ -144,7 +155,7 @@ export function RemoteSeries({ extId, url }) {
   const read = async (c) => {
     setBusy(c.url);
     try {
-      const { idByUrl } = await followSeries(ext, url, d);
+      const { idByUrl } = await followSeries(ext, url, d, { seriesId: lib?.series?.id });
       go(`/r/${idByUrl.get(norm(c.url))}`);
     } catch (e) { setErr(e.message); }
     finally { setBusy(''); }
@@ -181,7 +192,7 @@ export function RemoteSeries({ extId, url }) {
               {d.description && <p className="desc">{d.description}</p>}
               <div className="row">
                 {first && <button className="btn primary" disabled={!!busy} onClick={() => read(resume || first)}><Icon n="book" size={16} /> {resume ? `Continuar: ${resume.title}` : 'Comenzar a leer'}</button>}
-                {pending.length > 0 && <button className="btn" onClick={() => enqueue(pending.map(job))}><Icon n="down" size={16} /> Descargar {pending.length === d.chapters.length ? 'todo' : `${pending.length} faltantes`}</button>}
+                {pending.length > 0 && <button className="btn" onClick={() => download(pending)}><Icon n="down" size={16} /> Descargar {pending.length === d.chapters.length ? 'todo' : `${pending.length} faltantes`}</button>}
                 {lib?.series && <button className="btn" onClick={() => go(`/s/${lib.series.id}`)}><Icon n="book" size={16} /> En biblioteca</button>}
               </div>
             </div>
@@ -198,7 +209,7 @@ export function RemoteSeries({ extId, url }) {
                     <span className="ch-title">{busy === c.url ? 'Abriendo…' : c.title}</span>
                     {state && <span className="muted small">{state}</span>}
                   </button>
-                  {!have && !q && <button className="icon-btn" title="Descargar" onClick={() => enqueue(job(c))}><Icon n="down" /></button>}
+                  {!have && !q && <button className="icon-btn" title="Descargar" onClick={() => download([c])}><Icon n="down" /></button>}
                   {have && <Icon n="check" />}
                 </li>
               );

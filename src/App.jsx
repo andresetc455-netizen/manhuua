@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSettings } from './settings.js';
-import { useExtensions, addExtension } from './sources/extensions.js';
+import { useExtensions, addExtension, isEnabled } from './sources/extensions.js';
 import { detectProxy } from './sources/web.js';
 import { detectRender } from './sources/engine.js';
 import { useDownloads } from './downloads.js';
@@ -13,6 +13,8 @@ import Settings from './views/Settings.jsx';
 import { ExtensionHome, RemoteSeries } from './views/Extension.jsx';
 import { Updates, History, Browse, More } from './views/Feeds.jsx';
 import YouTubePanel from './views/YouTube.jsx';
+import Extensions, { StateDot } from './views/Extensions.jsx';
+import WorkView from './views/WorkView.jsx';
 
 function useRoute() {
   const [h, set] = useState(location.hash);
@@ -61,7 +63,7 @@ function AddExtension({ onClose }) {
         <label>URL de búsqueda (opcional, usá {'{q}'})
           <input value={searchUrl} onChange={(e) => setSearchUrl(e.target.value)} placeholder="https://ejemplo.com/buscar?q={q}" inputMode="url" />
         </label>
-        <p className="hint">También acepta un catálogo .json propio. Usalo solo con sitios cuyo contenido tengas derecho a descargar.</p>
+        <p className="hint">También acepta un catálogo .json propio o una extensión JSON (ver <a href="#/extensions" onClick={onClose}>Extensiones</a>). Usalo solo con sitios cuyo contenido tengas derecho a descargar.</p>
         <button className="btn primary" disabled={busy}>{busy ? 'Agregando…' : 'Agregar'}</button>
       </form>
     </Sheet>
@@ -86,14 +88,15 @@ function Sidebar({ route, open, onClose, onAdd }) {
           {item('', <Icon n="book" />, 'Biblioteca', cur === '' || cur === 's')}
           {item('updates', <Icon n="bell" />, 'Novedades', cur === 'updates')}
           {item('history', <Icon n="clock" />, 'Historial', cur === 'history')}
-          {item('browse', <Icon n="compass" />, 'Explorar', cur === 'browse' || cur === 'ext')}
+          {item('browse', <Icon n="compass" />, 'Explorar', cur === 'browse' || cur === 'ext' || cur === 'w')}
           {item('downloads', <Icon n="down" />, 'Descargas', cur === 'downloads', dl ? <b className="pill">{dl}</b> : null)}
           {item('settings', <Icon n="gear" />, 'Ajustes', cur === 'settings')}
         </nav>
         <div className="side-sep">Extensiones</div>
         <nav className="ext-list">
-          {exts.map((x) => item(`ext/${x.id}`, <Favicon ext={x} />, x.name, cur === 'ext' && route[1] === x.id))}
+          {exts.filter(isEnabled).map((x) => item(`ext/${x.id}`, <Favicon ext={x} />, x.name, cur === 'ext' && route[1] === x.id, <StateDot x={x} />))}
           <button className="side-item add" onClick={() => { onClose(); onAdd(); }}><Icon n="plus" /><span>Agregar extensión</span></button>
+          {item('extensions', <Icon n="gear" />, 'Gestionar extensiones', cur === 'extensions')}
         </nav>
       </aside>
     </>
@@ -119,6 +122,8 @@ export default function App() {
   else if (view === 'browse') page = <Browse onAdd={() => setAdding(true)} />;
   else if (view === 'more') page = <More />;
   else if (view === 'settings') page = <Settings />;
+  else if (view === 'extensions') page = <Extensions />;
+  else if (view === 'w') page = <WorkView key={a} workKey={a} />;
   else if (view === 'ext' && b === 's') page = <RemoteSeries key={c} extId={a} url={c} />;
   else if (view === 'ext') page = <ExtensionHome key={a} extId={a} />;
   else page = <Library />;
@@ -131,7 +136,7 @@ export default function App() {
         {page}
       </main>
       <nav className="tabbar">
-        {[['', 'book', 'Biblioteca', ['', 's']], ['updates', 'bell', 'Novedades', ['updates']], ['history', 'clock', 'Historial', ['history']], ['browse', 'compass', 'Explorar', ['browse', 'ext']], ['more', 'dots', 'Más', ['more', 'downloads', 'settings']]].map(([h, i, l, m]) => (
+        {[['', 'book', 'Biblioteca', ['', 's']], ['updates', 'bell', 'Novedades', ['updates']], ['history', 'clock', 'Historial', ['history']], ['browse', 'compass', 'Explorar', ['browse', 'ext', 'w']], ['more', 'dots', 'Más', ['more', 'downloads', 'settings', 'extensions']]].map(([h, i, l, m]) => (
           <a key={h} href={'#/' + h} className={m.includes(view || '') ? 'on' : ''}><Icon n={i} size={22} /><span>{l}</span></a>
         ))}
       </nav>

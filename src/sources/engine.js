@@ -159,3 +159,41 @@ export function explain(d, what = 'obras') {
   if (!out.length) out.push(`No se encontraron ${what} en la página.`);
   return out;
 }
+
+/** Estados de una extensión (gestor de extensiones). */
+export const STATES = {
+  available: 'Disponible', ok: 'Funcionando', blocked: 'Fuente bloqueada', notfound: 'No disponible', limited: 'Limitada',
+  conn: 'Error de conexión', incompatible: 'API incompatible', extraction: 'Sin datos reconocibles', disabled: 'Desactivada',
+};
+/** Tipo de error, para no confundir un bloqueo de la fuente con una falla de Manhuua. */
+export const ERROR_KINDS = {
+  source: 'error de la fuente', backend: 'error del backend (Render)', cors: 'bloqueo CORS del navegador', network: 'sin conexión / fuente caída',
+  extraction: 'error de extracción', incompatible: 'API incompatible', antibot: 'protección antibots',
+};
+/**
+ * Clasifica el diagnóstico de una carga. Devuelve {state, kind, httpStatus, label}.
+ * 401/403/451 → fuente bloqueada; 404/410 → no disponible; 429 → limitada; sin respuesta → conexión.
+ */
+export function classify(d = {}) {
+  const fail = [...(d.attempts || [])].reverse().find((a) => !a.ok) || {};
+  const ok = d.attempts?.some((a) => a.ok) || d.render?.bytes || d.via === 'catalogo JSON';
+  const st = d.httpStatus ?? (ok ? undefined : fail.status);
+  const src = d.errorSource || (ok ? undefined : fail.source);
+  const out = (state, kind) => ({ state, kind, httpStatus: st, label: STATES[state] + (st && state !== 'ok' && state !== 'incompatible' ? ` (${st})` : '') });
+  if (d.incompatible) return out('incompatible', 'incompatible');
+  if (!ok) {
+    if (src === 'backend') return out('conn', 'backend');
+    if (st && src !== 'network') {
+      const anti = d.challenge || fail.challenge;
+      if ([401, 403, 451].includes(st) || (st === 503 && anti)) return out('blocked', anti ? 'antibot' : 'source');
+      if ([404, 410].includes(st)) return out('notfound', 'source');
+      if (st === 429) return out('limited', 'source');
+      return out('conn', 'source');
+    }
+    const cors = (d.attempts || []).some((a) => /CORS/.test(a.error || '')) || /CORS/.test(d.httpError || '');
+    return out('conn', cors && !(d.attempts || []).some((a) => a.via !== 'directo') ? 'cors' : 'network');
+  }
+  if (d.antibot) return out('blocked', 'antibot');
+  if (!d.count) return out('extraction', 'extraction');
+  return out('ok', null);
+}

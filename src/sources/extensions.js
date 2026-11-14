@@ -2,7 +2,8 @@
 // Tipos: "web" (HTML, con datos embebidos y renderizado opcional), "api" (JSON público) y "catalog" (JSON propio de Manhuua).
 import { useEffect, useState } from 'react';
 import { fetchVia, extract } from './web.js';
-import { loadDoc, explain } from './engine.js';
+import { loadDoc, explain, classify } from './engine.js';
+import { mBrowse, mDetail, mPages, validateManifest, fetchManifest, isManifest } from './manifest.js';
 import { itemsFromJson, embeddedJson } from './jsonwalk.js';
 import { chaptersFromJson, chaptersFromDoc, nextChaptersPage, nextJsonPage, metaFromJson, finalize } from './chapters.js';
 import { catalogSource } from './catalog.js';
@@ -14,6 +15,9 @@ function load() { try { return JSON.parse(localStorage.getItem(KEY)) || []; } ca
 function save(l) { list = l; try { localStorage.setItem(KEY, JSON.stringify(l)); } catch {} subs.forEach((f) => f(l)); }
 
 export const getExtension = (id) => list.find((e) => e.id === id);
+export const isEnabled = (x) => x.enabled !== false;
+/** Extensión dueña de una URL interna "mf:<id-del-manifiesto>/..." (sirve aunque se haya reinstalado). */
+export const extensionForUrl = (url = '', fallbackId) => getExtension(fallbackId) || (/^mf:/.test(url) ? list.find((e) => e.manifest?.id === url.slice(3).split('/')[0]) : undefined);
 export function useExtensions() {
   const [l, set] = useState(list);
   useEffect(() => (subs.add(set), () => subs.delete(set)), []);
@@ -26,19 +30,44 @@ async function detectType(url) {
   try {
     const t = await fetchVia(url);
     const j = JSON.parse(t);
-    return { type: Array.isArray(j?.series) ? 'catalog' : 'api', json: j };
+    return { type: isManifest(j) ? 'manifest' : Array.isArray(j?.series) ? 'catalog' : 'api', json: j };
   } catch { return { type: 'web' }; }
 }
 
-export async function addExtension({ url, name, searchUrl }) {
+/** Instala (o actualiza, si ya existe con el mismo id) una extensión JSON a partir de su manifiesto. */
+export function installManifest(manifest, manifestUrl) {
+  const errs = validateManifest(manifest);
+  if (errs.length) throw new Error('Extensión inválida: ' + errs.join(' '));
+  const prev = list.find((e) => e.manifest?.id === manifest.id);
+  const base = { type: 'manifest', manifest, manifestUrl: manifestUrl || prev?.manifestUrl || '', name: String(manifest.name).slice(0, 40), version: String(manifest.version), url: manifest.baseUrl, searchUrl: manifest.search ? 'manifest' : '', icon: manifest.icon || `${new URL(manifest.baseUrl).origin}/favicon.ico` };
+  if (prev) { updateExtension(prev.id, { ...base, status: { state: 'available', at: Date.now() } }); return getExtension(prev.id); }
+  const ext = { id: Math.random().toString(36).slice(2, 9), ...base, enabled: true, addedAt: Date.now(), status: { state: 'available', at: Date.now() } };
+  save([...list, ext]);
+  return ext;
+}
+
+/** Vuelve a leer el manifiesto desde su URL. Devuelve {ext, changed, from, to}. */
+export async function refreshExtension(id) {
+  const x = getExtension(id);
+  if (x?.type !== 'manifest' || !x.manifestUrl) return { ext: x, changed: false };
+  const m = await fetchManifest(x.manifestUrl);
+  const from = x.version;
+  if (m.id !== x.manifest.id) throw new Error(`El archivo es de otra extensión ("${m.id}").`);
+  const ext = installManifest(m, x.manifestUrl);
+  return { ext, changed: from !== ext.version, from, to: ext.version };
+}
+
+export async function addExtension({ url, name, searchUrl, json }) {
+  if (json) return installManifest(typeof json === 'string' ? JSON.parse(json) : json);
   url = url.trim();
   if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
   const u = new URL(url.replace(/\{page\}|\{q\}/g, '1'));
-  const { type, json } = await detectType(u.href);
+  const { type, json: data } = await detectType(u.href);
+  if (type === 'manifest') return installManifest(data, u.href);
   let title = name?.trim();
   if (!title) {
     try {
-      if (type === 'catalog') title = json.name;
+      if (type === 'catalog') title = data.name;
       else if (type === 'api') title = `${u.hostname} (API)`;
       else {
         const doc = new DOMParser().parseFromString(await fetchVia(u.href), 'text/html');
@@ -46,7 +75,7 @@ export async function addExtension({ url, name, searchUrl }) {
       }
     } catch {}
   }
-  const ext = { id: Math.random().toString(36).slice(2, 9), type, url, name: (title || u.hostname).trim().slice(0, 40), searchUrl: searchUrl?.trim() || '', icon: `${u.origin}/favicon.ico`, addedAt: Date.now() };
+  const ext = { id: Math.random().toString(36).slice(2, 9), type, url, name: (title || u.hostname).trim().slice(0, 40), searchUrl: searchUrl?.trim() || '', icon: `${u.origin}/favicon.ico`, addedAt: Date.now(), enabled: true, status: { state: 'available', at: Date.now() } };
   save([...list, ext]);
   return ext;
 }
@@ -127,6 +156,7 @@ const pageOf = (tpl, page, q = '') => tpl.replace('{page}', page).replace('{q}',
 
 /** Navega una extensión: página inicial, siguiente página o búsqueda. Devuelve {items, next, diag}. */
 export async function browse(ext, { url, query, page = 1 } = {}) {
+  if (ext.type === 'manifest') return mBrowse(ext, { query, page });
   if (ext.type === 'catalog') {
     const items = await catalogSource(ext).search(query || '');
     return { items: items.map((i) => ({ ...i, url: `catalog:${i.remoteId}` })), next: null, diag: { via: 'catalogo JSON', count: items.length } };
@@ -178,6 +208,7 @@ const MAX_PAGES = 20;
  * Nunca inventa capítulos: si la fuente no los da, devuelve la lista vacía con el diagnóstico.
  */
 export async function seriesDetail(ext, url, fallback = {}) {
+  if (ext.type === 'manifest') return mDetail(ext, url, fallback);
   if (ext.type === 'catalog') {
     const id = url.replace(/^catalog:/, '');
     const src = catalogSource(ext);
@@ -232,4 +263,42 @@ export async function seriesDetail(ext, url, fallback = {}) {
   if (!out.chapters.length && out.unresolved) diag.reasons.unshift(`La página tiene datos de ${out.unresolved} capítulos pero sin su dirección (URL). Manhuua no inventa enlaces: probá con la URL de la lista de capítulos del sitio.`);
   if (diag.pageError) diag.reasons.push(`No se pudo cargar una página siguiente de la lista: ${diag.pageError}`);
   return { ...out, diag };
+}
+
+/** Imágenes de un capítulo de una extensión JSON (manifiesto). null si no corresponde. */
+export async function chapterImages(url, extId) {
+  if (!/^mf:/.test(url || '')) return null;
+  const ext = extensionForUrl(url, extId);
+  if (!ext || ext.type !== 'manifest') throw new Error('La extensión de este capítulo ya no está instalada. Los capítulos descargados se siguen leyendo; para leer en línea volvé a instalarla.');
+  if (!isEnabled(ext)) throw new Error(`La extensión "${ext.name}" está desactivada. Activala en Extensiones para leer en línea.`);
+  return mPages(ext, url);
+}
+
+/** Guarda el resultado de una carga como estado de la extensión. */
+export function recordStatus(ext, diag, extra = {}) {
+  const c = classify(diag);
+  const status = { state: c.state, kind: c.kind, label: c.label, httpStatus: c.httpStatus, ms: diag.ms ?? diag.attempts?.reduce((t, a) => t + (a.ms || 0), 0), at: Date.now(), works: diag.count ?? 0, message: diag.reasons?.[0] || '', ...extra };
+  updateExtension(ext.id, { status });
+  return status;
+}
+
+/**
+ * Comprueba una extensión: una sola petición al catálogo y, si hay obras, la ficha de la primera.
+ * No reintenta ante 401/403/429/451 (no se reintenta en absoluto).
+ */
+export async function checkExtension(id) {
+  const ext = getExtension(id);
+  if (!ext) return null;
+  const t0 = Date.now();
+  const r = await browse(ext, {}).catch((e) => ({ items: [], diag: e.diag || { attempts: [], httpError: e.message, reasons: [e.message] } }));
+  r.diag.ms = Date.now() - t0;
+  let extra = {};
+  if (r.items.length) {
+    try {
+      const d = await seriesDetail(ext, r.items[0].url, r.items[0]);
+      extra = { chapters: d.chapters.length, sample: r.items[0].title };
+      if (!d.chapters.length) { const c = classify(d.diag); extra.chapterError = `${c.label}: ${d.diag.reasons?.[0] || ''}`; }
+    } catch (e) { extra = { chapters: 0, chapterError: e.message }; }
+  }
+  return recordStatus(ext, r.diag, extra);
 }

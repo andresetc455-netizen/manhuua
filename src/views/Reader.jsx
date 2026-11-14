@@ -5,6 +5,8 @@ import { translatePage, clearTranslations, fitFont } from '../translate.js';
 import { useSettings } from '../settings.js';
 import { Icon } from '../ui.jsx';
 import { activeProxy, proxied, fetchVia } from '../sources/web.js';
+import { sourceKey, seriesSources, equivalent } from '../online.js';
+import { getExtension } from '../sources/extensions.js';
 
 /**
  * Una página del lector. En capítulos en línea intenta primero la imagen directa (sin gastar el
@@ -238,8 +240,26 @@ export default function Reader({ chapterId }) {
   if (!st) return <div className="reader dark" />;
   if (st.missing) return <div className="page"><p className="empty">Capítulo no encontrado. <a href="#/">Volver</a></p></div>;
 
-  const idx = st.list.findIndex((c) => c.id === chapterId);
-  const prev = st.list[idx - 1], next = st.list[idx + 1];
+  // Anterior/siguiente dentro de la misma fuente: nunca se mezclan capítulos de fuentes distintas.
+  const mySrc = sourceKey(st.chapter, st.series);
+  const same = st.list.filter((c) => sourceKey(c, st.series) === mySrc);
+  const idx = same.findIndex((c) => c.id === chapterId);
+  const prev = same[idx - 1], next = same[idx + 1];
+  const srcKeys = [...new Set(st.list.map((c) => sourceKey(c, st.series)))];
+  const srcName = (k) => k === 'local' ? 'Local' : getExtension(k)?.name || seriesSources(st.series).find((x) => x.extId === k)?.extName || 'Fuente eliminada';
+  const switchSource = (k) => {
+    if (k === mySrc) return;
+    const r = equivalent(st.chapter, st.list, st.series, k);
+    if (!r) return;
+    if (!r.exact && !confirm(`No hay una equivalencia segura en ${srcName(k)}: ${r.reason}.\n\n¿Abrir "${r.chapter.title}"?`)) return;
+    updateSeries(st.series.id, { activeSource: k });
+    location.replace(`#/r/${r.chapter.id}`);
+  };
+  const srcSelect = srcKeys.length > 1 && (
+    <select className="src-select" value={mySrc} onChange={(e) => switchSource(e.target.value)} title="Fuente de lectura" aria-label="Fuente de lectura">
+      {srcKeys.map((k) => <option key={k} value={k}>{srcName(k)}</option>)}
+    </select>
+  );
   const open = (c) => c && location.replace(`#/r/${c.id}`);
   const back = () => location.replace(`#/s/${st.chapter.seriesId}`);
   if (st.loading || st.error) {
@@ -249,6 +269,7 @@ export default function Reader({ chapterId }) {
         <header className="r-top">
           <button className="icon-btn" onClick={back} aria-label="Volver"><Icon n="back" /></button>
           <div className="r-title"><b>{st.series?.title}</b><span>{st.chapter.title}</span></div>
+          {srcSelect}
         </header>
         <div className="r-state">
           {st.loading ? <p className="muted">Cargando el capítulo desde la fuente…</p> : (
@@ -283,6 +304,7 @@ export default function Reader({ chapterId }) {
       <header className={'r-top' + (ui ? '' : ' hide')}>
         <button className="icon-btn" onClick={back} aria-label="Volver"><Icon n="back" /></button>
         <div className="r-title"><b>{st.series?.title}</b><span>{st.chapter.title}</span></div>
+        {srcSelect}
         <button className={'icon-btn' + (trOn ? ' accent' : '')} title="Traducir (inglés → español)" onClick={toggleTr}
           onContextMenu={(e) => { e.preventDefault(); if (confirm('¿Rehacer la traducción de este capítulo?')) clearTranslations(st.chapter.id).then(() => { setTr({}); setTrOn(false); setTimeout(() => setTrOn(true)); }); }}>
           <Icon n="translate" />
