@@ -1,7 +1,9 @@
 // Cola de descargas: URL de capítulo -> imágenes -> guardado offline en la biblioteca.
 import { useEffect, useState } from 'react';
 import { analyze, fetchVia } from './sources/web.js';
-import { ensureSeries, saveChapter, updateSeries, thumbnail } from './library.js';
+import { ensureSeries, saveChapter, updateSeries } from './library.js';
+import { setCover, autoCover, needsCover } from './covers.js';
+import { loadSettings } from './settings.js';
 import { byIndex, getAll } from './db.js';
 
 const jobs = [];
@@ -52,10 +54,10 @@ async function process(job) {
   set({ status: 'analizando' });
   const series = await ensureSeries(job.series, job.sourceUrl ? { sourceUrl: job.sourceUrl } : {});
   if (job.sourceUrl && !series.sourceUrl) await updateSeries(series.id, { sourceUrl: job.sourceUrl });
-  if (job.cover && !series.cover) {
+  if (job.cover && needsCover(series)) {
     try {
-      series.cover = await thumbnail(await fetchVia(job.cover, 'blob', job.sourceUrl || job.url));
-      await updateSeries(series.id, { cover: series.cover });
+      await setCover(series.id, await fetchVia(job.cover, 'blob', job.sourceUrl || job.url), { provider: 'site', url: job.cover, link: job.sourceUrl });
+      series.cover = true;
     } catch {}
   }
   const existing = await byIndex('chapters', 'seriesId', series.id);
@@ -81,6 +83,7 @@ async function process(job) {
   if (!pages.length) throw new Error('No se pudo descargar ninguna imagen');
   await saveChapter(series, { title, number, pages, url: job.url });
   set({ status: 'listo', missing: images.length - pages.length });
+  if (loadSettings().coverAuto) autoCover(series.id).catch(() => {});
 }
 
 async function run() {

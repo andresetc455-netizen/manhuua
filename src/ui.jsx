@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { proxied, activeProxy } from './sources/web.js';
+import { hueOf } from './covers.js';
 
 const P = {
   back: 'M15 18l-6-6 6-6',
@@ -24,6 +25,7 @@ const P = {
   bell: 'M6 8a6 6 0 1112 0c0 7 3 9 3 9H3s3-2 3-9M10 21h4',
   dots: 'M5 12h.01M12 12h.01M19 12h.01',
   compass: 'M12 21a9 9 0 100-18 9 9 0 000 18zM16 8l-2 6-6 2 2-6z',
+  image: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15 9h.01',
   globe: 'M12 21a9 9 0 100-18 9 9 0 000 18zM3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18',
 };
 export function Icon({ n, size = 20, fill }) {
@@ -47,12 +49,29 @@ export function useSrc(v, referer) {
   return src;
 }
 
-export function Cover({ src, title, referer, children }) {
+/** Portada 2:3. Si no hay imagen (o falla), muestra una portada tipográfica de respaldo. */
+export function Cover({ src, title, kind, referer, children }) {
   const s = useSrc(src, referer);
+  const [bad, setBad] = useState(false);
+  useEffect(() => setBad(false), [s]);
+  const show = s && !bad;
   return (
     <div className="cover">
-      {s ? <img src={s} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <div className="cover-ph">{(title || '?').slice(0, 1)}</div>}
+      {show
+        ? <img src={s} alt={title || ''} loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setBad(true)} />
+        : <FallbackCover title={title} kind={kind} />}
       {children}
+    </div>
+  );
+}
+
+function FallbackCover({ title = '', kind }) {
+  const h = hueOf(title);
+  return (
+    <div className="cover-fb" style={{ '--h': h }} aria-label={`${title} (sin portada)`}>
+      <span className="fb-initial">{(title.trim()[0] || '?').toUpperCase()}</span>
+      <span className="fb-title">{title}</span>
+      <span className="fb-kind">{kind || 'Sin portada'}</span>
     </div>
   );
 }

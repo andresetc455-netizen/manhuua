@@ -8,7 +8,8 @@
     "build": "vite build",
     "build:single": "vite build --mode single",
     "preview": "vite preview",
-    "serve": "npm run build && node server/proxy.mjs"
+    "serve": "npm run build && node server/proxy.mjs",
+    "test": "vitest run"
   },
   "dependencies": {
     "jszip": "^3.10.1",
@@ -19,6 +20,7 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.4",
     "vite": "^7.1.12",
-    "vite-plugin-singlefile": "^2.3.0"
+    "vite-plugin-singlefile": "^2.3.0",
+    "vitest": "^3.2.4"
   }
 }

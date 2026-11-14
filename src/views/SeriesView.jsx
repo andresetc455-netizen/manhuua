@@ -3,12 +3,14 @@ import { useDb, get, byIndex } from '../db.js';
 import { byNumber, deleteChapter, deleteSeries, markChapters, nextToRead, updateSeries } from '../library.js';
 import { checkUpdates } from '../downloads.js';
 import { Icon, Cover, BgCover, go } from '../ui.jsx';
+import CoverSheet from './CoverSheet.jsx';
 
 export default function SeriesView({ id }) {
   const [desc, setDesc] = useState(false);
   const [msg, setMsg] = useState('');
   const [filter, setFilter] = useState('');
   const [desc2, setDesc2] = useState(true);
+  const [coverOpen, setCoverOpen] = useState(false);
   const d = useDb(async () => {
     const [s, chapters, progress] = await Promise.all([get('series', id), byIndex('chapters', 'seriesId', id), byIndex('progress', 'seriesId', id)]);
     return { s, chapters: chapters.sort(byNumber), progress };
@@ -41,15 +43,21 @@ export default function SeriesView({ id }) {
       {msg && <div className="toast" onClick={() => setMsg('')}>{msg}</div>}
       <div className="hero">
         <BgCover src={s.cover} />
-        <Cover src={s.cover} title={s.title} />
+        <button className="cover-edit" onClick={() => setCoverOpen(true)} title="Cambiar portada">
+          <Cover src={s.cover} title={s.title} kind={s.kind} />
+          <span className="cover-edit-lbl"><Icon n="image" size={14} /> Portada</span>
+        </button>
         <div>
           <h1>{s.title}</h1>
+          {(s.kind || s.genres?.length) && <div className="tags">{[s.kind, ...(s.genres || [])].filter(Boolean).map((g) => <span key={g} className="ch-chip">{g}</span>)}</div>}
           <p className="muted">{chapters.length} capítulos · {readCount} leídos</p>
+          {s.coverSource?.link && <p className="muted small">Portada: <a href={s.coverSource.link} target="_blank" rel="noreferrer">{{ anilist: 'AniList', kitsu: 'Kitsu', site: 'sitio' }[s.coverSource.provider] || 'enlace'}</a></p>}
           {s.sourceUrl && <p className="muted small"><a href={s.sourceUrl} target="_blank" rel="noreferrer">{new URL(s.sourceUrl).hostname}</a></p>}
           {s.description && <p className={'desc' + (desc ? ' open' : '')} onClick={() => setDesc(!desc)}>{s.description}</p>}
           {next && <button className="btn primary" onClick={() => go(`/r/${next.id}`)}><Icon n="play" size={16} fill /> {started ? 'Continuar' : 'Empezar'} · {next.title}</button>}
         </div>
       </div>
+      {coverOpen && <CoverSheet series={s} onClose={() => setCoverOpen(false)} />}
       <div className="list-head">
         <h3 className="sec">Capítulos</h3>
         <div className="row">

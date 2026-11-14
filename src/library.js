@@ -5,14 +5,15 @@ import { natural } from './importers.js';
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 export const byNumber = (a, b) => (a.number ?? 1e9) - (b.number ?? 1e9) || natural(a.title, b.title) || a.addedAt - b.addedAt;
 
-export async function thumbnail(blob) {
+/** Recorta/escala a 2:3 (600×900 por defecto, nítido en pantallas retina). */
+export async function thumbnail(blob, W = 600, H = 900) {
   try {
     const bmp = await createImageBitmap(blob);
-    const W = 300, H = 450, s = Math.max(W / bmp.width, H / bmp.height);
+    const s = Math.max(W / bmp.width, H / bmp.height);
     const c = document.createElement('canvas');
     c.width = W; c.height = H;
     c.getContext('2d').drawImage(bmp, (W - bmp.width * s) / 2, 0, bmp.width * s, bmp.height * s);
-    return await new Promise((r) => c.toBlob((b) => r(b || blob), 'image/jpeg', 0.82));
+    return await new Promise((r) => c.toBlob((b) => r(b || blob), 'image/jpeg', 0.88));
   } catch { return blob; }
 }
 
@@ -27,14 +28,15 @@ export async function ensureSeries(title, extra = {}) {
 }
 
 /** Guarda un capítulo con sus páginas (Blobs) en una serie. */
-export async function saveChapter(series, { title, number, pages, url }) {
+export async function saveChapter(series, { title, number, pages, url }, { firstPageCover = true } = {}) {
   if (!pages.length) throw new Error('El capítulo no tiene imágenes');
   const ch = { id: uid(), seriesId: series.id, title: title || `Capítulo ${number ?? ''}`.trim(), number: number ?? null, pageCount: pages.length, addedAt: Date.now(), url };
-  const cover = series.cover ? null : await thumbnail(pages[0]);
+  const latest = (await get('series', series.id)) || series;
+  const cover = latest.cover || !firstPageCover ? null : await thumbnail(pages[0]);
   await write(['chapters', 'pages', 'series'], (o) => {
     o.chapters.put(ch);
     pages.forEach((p, i) => o.pages.put(p, [ch.id, i]));
-    if (cover) o.series.put({ ...series, cover });
+    if (cover) o.series.put({ ...latest, cover, coverSource: { provider: 'page' } });
   });
   if (cover) series.cover = cover;
   navigator.storage?.persist?.().catch(() => {});
@@ -42,10 +44,13 @@ export async function saveChapter(series, { title, number, pages, url }) {
 }
 
 export async function importGroups(groups) {
+  const out = [];
   for (const g of groups) {
     const s = await ensureSeries(g.series);
     for (const c of g.chapters) await saveChapter(s, c);
+    out.push(s);
   }
+  return out;
 }
 
 export async function deleteChapter(id) {
@@ -124,7 +129,7 @@ export async function loadDemo() {
       x.font = '30px system-ui'; x.fillText(p === 6 ? 'Continuará…' : '— la niebla se mueve —', 360, 1325);
       pages.push(await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.85)));
     }
-    await saveChapter(s, { title: `Capítulo ${ch}`, number: ch, pages });
+    await saveChapter(s, { title: `Capítulo ${ch}`, number: ch, pages }, { firstPageCover: false });
   }
   return s;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 const KEY = 'manhuua.settings';
-export const DEFAULTS = { mode: 'vertical', dir: 'ltr', fit: 'screen', theme: 'dark', gap: 0, maxWidth: 820, keepAwake: true, publicProxy: true, trProvider: 'mymemory', trFrom: 'en', trTo: 'es', trEmail: '', libreUrl: 'https://libretranslate.com', libreKey: '' };
+export const DEFAULTS = { mode: 'vertical', dir: 'ltr', fit: 'screen', theme: 'dark', gap: 0, maxWidth: 820, keepAwake: true, publicProxy: true, coverAuto: true, genUrl: 'https://api.openai.com/v1/images/generations', genModel: 'gpt-image-1', genSize: '1024x1536', genKey: '', trProvider: 'mymemory', trFrom: 'en', trTo: 'es', trEmail: '', libreUrl: 'https://libretranslate.com', libreKey: '' };
 const subs = new Set();
 
 export function loadSettings() {

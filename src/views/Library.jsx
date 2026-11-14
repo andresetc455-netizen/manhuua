@@ -3,6 +3,8 @@ import { useDb, getAll } from '../db.js';
 import { parseFiles } from '../importers.js';
 import { importGroups, loadDemo } from '../library.js';
 import { checkAllUpdates } from '../downloads.js';
+import { autoCover, autoCoverAll } from '../covers.js';
+import { loadSettings } from '../settings.js';
 import { Icon, Cover, BgCover, Sheet } from '../ui.jsx';
 
 const FILTERS = [['all', 'Todo'], ['fav', 'Favoritos'], ['reading', 'Leyendo'], ['unread', 'Sin leer']];
@@ -16,7 +18,11 @@ function ImportSheet({ chapters, onClose }) {
   const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true);
-    try { await importGroups(groups); onClose(); } catch (e) { alert(e.message); setBusy(false); }
+    try {
+      const saved = await importGroups(groups);
+      if (loadSettings().coverAuto) saved.forEach((x) => autoCover(x.id).catch(() => {}));
+      onClose();
+    } catch (e) { alert(e.message); setBusy(false); }
   };
   return (
     <Sheet title="Importar" onClose={onClose}>
@@ -64,6 +70,14 @@ export default function Library() {
     try { setPending(await parseFiles(files)); } catch (err) { alert('Error al leer: ' + err.message); }
     setMsg(''); e.target.value = '';
   };
+  const covers = async () => {
+    setMsg('Buscando portadas…');
+    try {
+      const r = await autoCoverAll((i, n) => setMsg(`Buscando portadas ${i}/${n}…`));
+      setMsg(r.total ? `Portadas encontradas: ${r.found} de ${r.total}` : 'Todas las series ya tienen portada');
+    } catch (e) { setMsg(e.message); }
+    setTimeout(() => setMsg(''), 3500);
+  };
   const update = async () => {
     setMsg('Buscando capítulos nuevos…');
     const n = await checkAllUpdates();
@@ -76,9 +90,10 @@ export default function Library() {
       <header className="top">
         <h1>Biblioteca</h1>
         <div className="actions">
+          <button className="icon-btn" title="Buscar portadas que falten" onClick={covers}><Icon n="image" /></button>
           <button className="icon-btn" title="Buscar actualizaciones" onClick={update}><Icon n="refresh" /></button>
           <button className="icon-btn" title="Importar carpeta" onClick={() => dirRef.current.click()}><Icon n="folder" /></button>
-          <button className="btn primary sm" onClick={() => fileRef.current.click()}><Icon n="plus" size={16} /> Importar</button>
+          <button className="btn primary sm" onClick={() => fileRef.current.click()}><Icon n="plus" size={16} /><span className="hide-sm"> Importar</span></button>
         </div>
         <input ref={fileRef} type="file" hidden multiple accept=".cbz,.zip,image/*" onChange={onFiles} />
         <input ref={dirRef} type="file" hidden multiple webkitdirectory="" onChange={onFiles} />
@@ -132,7 +147,8 @@ export default function Library() {
         <div className="grid">
           {list.map((s) => (
             <a key={s.id} className="card" href={`#/s/${s.id}`}>
-              <Cover src={s.cover} title={s.title}>
+              <Cover src={s.cover} title={s.title} kind={s.kind}>
+                {s.kind && <span className="kind">{s.kind}</span>}
                 {s.unread > 0 && <span className="badge">{s.unread}</span>}
                 {s.favorite && <span className="fav-star"><Icon n="star" size={14} fill /></span>}
                 {s.isNew && <span className="tag-new">Nuevo</span>}

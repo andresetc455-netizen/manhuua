@@ -56,6 +56,17 @@ export default function Settings() {
           </>
         )}
       </div>
+      <h3 className="sec">Portadas</h3>
+      <div className="card-box">
+        <label className="opt check"><input type="checkbox" checked={s.coverAuto} onChange={(e) => set({ coverAuto: e.target.checked })} /> Buscar portadas automáticamente en AniList y Kitsu al importar o descargar</label>
+        <p className="hint" style={{ margin: 0 }}>Generación con IA (opcional): API compatible con OpenAI Images. Sin clave, la opción no aparece.</p>
+        <label className="opt">URL del endpoint<input value={s.genUrl} onChange={(e) => set({ genUrl: e.target.value })} inputMode="url" /></label>
+        <div className="row">
+          <label className="opt">Modelo<input value={s.genModel} onChange={(e) => set({ genModel: e.target.value })} /></label>
+          <label className="opt">Tamaño<input value={s.genSize} onChange={(e) => set({ genSize: e.target.value })} /></label>
+        </div>
+        <label className="opt">API key (se guarda solo en este dispositivo)<input type="password" value={s.genKey} onChange={(e) => set({ genKey: e.target.value })} autoComplete="off" /></label>
+      </div>
       <h3 className="sec">Red</h3>
       <div className="card-box">
         <label className="opt">Proxy CORS (prefijo; se le agrega la URL codificada, o usá {'{url}'})
