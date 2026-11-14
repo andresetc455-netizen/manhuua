@@ -5,6 +5,8 @@ import { ensureSeries, saveChapter, updateSeries } from './library.js';
 import { setCover, autoCover, needsCover } from './covers.js';
 import { loadSettings } from './settings.js';
 import { byIndex, getAll } from './db.js';
+import { getExtension, seriesDetail } from './sources/extensions.js';
+import { followSeries } from './online.js';
 
 const jobs = [];
 const subs = new Set();
@@ -61,7 +63,7 @@ async function process(job) {
     } catch {}
   }
   const existing = await byIndex('chapters', 'seriesId', series.id);
-  if (existing.some((c) => c.url === job.url)) return set({ status: 'omitido', error: 'Ya estaba en la biblioteca' });
+  if (existing.some((c) => c.url === job.url && !c.online)) return set({ status: 'omitido', error: 'Ya estaba descargado' });
 
   let { images, title, number } = job;
   if (!images) {
@@ -73,7 +75,10 @@ async function process(job) {
   let n = 0;
   const blobs = await pool(images, 4, async (u) => {
     let b = null;
-    for (let t = 0; t < 3 && !b; t++) { try { b = await fetchVia(u, 'blob', job.url); } catch (e) { if (t === 2) console.warn(u, e); } }
+    for (let t = 0; t < 3 && !b; t++) {
+      try { b = await fetchVia(u, 'blob', job.url); }
+      catch (e) { if (t === 2 || [401, 403, 404, 410, 451].includes(e.status)) { console.warn(u, e.message); break; } } // sin reintentos si la fuente lo rechaza
+    }
     set({ done: ++n });
     return b;
   });
@@ -96,9 +101,20 @@ async function run() {
   running = false;
 }
 
-/** Revisa una serie con sourceUrl y encola capítulos nuevos. Devuelve cantidad encolada. */
+/**
+ * Revisa una serie con sourceUrl. Obras en línea: agrega los capítulos nuevos a la lista (sin
+ * descargar). Obras descargadas: encola los capítulos nuevos. Devuelve la cantidad de nuevos.
+ */
 export async function checkUpdates(series) {
   if (!series.sourceUrl) return 0;
+  if (series.online && series.extId) {
+    const ext = getExtension(series.extId);
+    if (!ext) throw new Error('La extensión de esta obra ya no existe');
+    const d = await seriesDetail(ext, series.sourceUrl, { title: series.title });
+    if (!d.chapters.length) throw new Error(d.diag?.reasons?.[0] || 'La fuente no devolvió capítulos');
+    return (await followSeries(ext, series.sourceUrl, d)).added;
+  }
+  if (!/^https?:/.test(series.sourceUrl)) return 0;
   const info = await analyze(series.sourceUrl);
   const have = new Set((await byIndex('chapters', 'seriesId', series.id)).map((c) => c.url));
   const fresh = info.chapters.filter((c) => !have.has(c.url));

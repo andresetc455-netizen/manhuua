@@ -20,7 +20,7 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 function corsHeaders(req) {
   const o = req.headers.origin;
-  const expose = { 'access-control-expose-headers': 'x-final-url, x-manhuua-error, retry-after' };
+  const expose = { 'access-control-expose-headers': 'x-final-url, x-manhuua-error, x-upstream-server, x-upstream-challenge, retry-after' };
   if (!C.origins.length) return { 'access-control-allow-origin': '*', ...expose };
   return o && originAllowed(o, C.origins) ? { 'access-control-allow-origin': o, vary: 'Origin', ...expose } : { vary: 'Origin' };
 }
@@ -55,6 +55,9 @@ async function proxy(req, u, res, cors) {
       'content-type': r.headers.get('content-type') || 'application/octet-stream',
       'cache-control': r.ok ? 'public, max-age=1800' : 'no-store',
       'x-final-url': finalUrl,
+      // Para el diagnóstico: quién atendió en el sitio y si respondió con una verificación antibots.
+      'x-upstream-server': (r.headers.get('server') || '').slice(0, 40),
+      ...(!r.ok && (r.headers.get('cf-mitigated') === 'challenge' || /just a moment|attention required|captcha|challenge-platform/i.test(buf.subarray(0, 4000).toString('latin1'))) ? { 'x-upstream-challenge': '1' } : {}),
       // El contenido ajeno nunca se ejecuta en el origen del backend.
       'content-security-policy': "sandbox; default-src 'none'",
       'x-content-type-options': 'nosniff',
@@ -70,7 +73,7 @@ async function renderRoute(req, u, res, cors) {
   if (!/^https?:\/\//i.test(target)) return send(res, 400, cors, 'manhuua-render: parámetro url inválido');
   try {
     await assertPublicUrl(target, { allowPrivate: C.allowPrivate });
-    const kind = u.searchParams.get('kind') === 'chapter' ? 'chapter' : 'catalog';
+    const kind = ['chapter', 'series'].includes(u.searchParams.get('kind')) ? u.searchParams.get('kind') : 'catalog';
     const out = await renderSlot(() => render(target, kind, { maxMs: C.renderTimeoutMs, allowPrivate: C.allowPrivate }));
     sendJson(res, 200, cors, out);
   } catch (e) {
@@ -94,7 +97,8 @@ const server = http.createServer(async (req, res) => {
   const api = u.pathname.endsWith('/proxy') ? 'proxy' : u.pathname.endsWith('/render') ? 'render' : u.pathname.endsWith('/health') ? 'health' : null;
   try {
     if (req.method === 'OPTIONS') return send(res, 204, { ...cors, 'access-control-allow-methods': 'GET, OPTIONS', 'access-control-allow-headers': '*', 'access-control-max-age': '86400' });
-    if (api && req.headers.origin && !originAllowed(req.headers.origin, C.origins)) return sendJson(res, 403, cors, { error: 'Origen no permitido' });
+    // Origen no permitido: se responde legible para que la app explique qué configurar (no expone datos).
+    if (api && req.headers.origin && !originAllowed(req.headers.origin, C.origins)) return sendJson(res, 403, { 'access-control-allow-origin': req.headers.origin, vary: 'Origin', 'access-control-expose-headers': 'x-manhuua-error' }, { error: `Origen no permitido: ${req.headers.origin}` }, { 'x-manhuua-error': '1' });
     if (api === 'health') return sendJson(res, 200, cors, { ok: true, service: 'manhuua-backend', render: await renderAvailable(), uptime: Math.round(process.uptime()) });
     if (api && req.method !== 'GET') return sendJson(res, 405, cors, { error: 'Método no permitido' });
     if (api) {

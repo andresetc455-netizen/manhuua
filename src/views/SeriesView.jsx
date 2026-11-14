@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useDb, get, byIndex } from '../db.js';
 import { byNumber, deleteChapter, deleteSeries, markChapters, nextToRead, updateSeries } from '../library.js';
-import { checkUpdates } from '../downloads.js';
+import { checkUpdates, enqueue } from '../downloads.js';
 import { Icon, Cover, BgCover, go } from '../ui.jsx';
 import CoverSheet from './CoverSheet.jsx';
 
@@ -26,7 +26,7 @@ export default function SeriesView({ id }) {
 
   const refresh = async () => {
     setMsg('Buscando…');
-    try { const n = await checkUpdates(s); setMsg(n ? `${n} capítulos nuevos en cola de descargas` : 'Sin capítulos nuevos'); }
+    try { const n = await checkUpdates(s); setMsg(n ? (s.online ? `${n} capítulos nuevos para leer en línea` : `${n} capítulos nuevos en cola de descargas`) : 'Sin capítulos nuevos'); }
     catch (e) { setMsg(e.message); }
   };
 
@@ -74,9 +74,10 @@ export default function SeriesView({ id }) {
             <li key={c.id} className={p?.done ? 'read' : ''}>
               <a href={`#/r/${c.id}`}>
                 <span className="ch-title">{c.title}</span>
-                <span className="muted small">{c.pageCount} págs.{p && !p.done ? ` · pág. ${p.page + 1}` : ''}{c.id === s.lastChapterId ? ' · último' : ''}</span>
+                <span className="muted small">{c.online ? 'en línea' : `${c.pageCount} págs.`}{p && !p.done ? ` · pág. ${p.page + 1}` : ''}{c.id === s.lastChapterId ? ' · último' : ''}</span>
               </a>
               <button className={'icon-btn' + (p?.done ? ' accent' : '')} title={p?.done ? 'Marcar no leído' : 'Marcar leído'} onClick={() => markChapters([c], !p?.done)}><Icon n="check" /></button>
+              {c.online && c.url && <button className="icon-btn" title="Descargar para leer sin conexión" onClick={() => enqueue({ url: c.url, title: c.title, number: c.number, series: s.title, sourceUrl: /^https?:/.test(s.sourceUrl || '') ? s.sourceUrl : undefined, images: c.remotePages && !c.fetchedAt ? c.remotePages : undefined })}><Icon n="down" size={18} /></button>}
               <button className="icon-btn" title="Eliminar capítulo" onClick={() => confirm(`¿Eliminar ${c.title}?`) && deleteChapter(c.id)}><Icon n="trash" size={18} /></button>
             </li>
           );

@@ -152,6 +152,7 @@ export default function Library() {
                 {s.unread > 0 && <span className="badge">{s.unread}</span>}
                 {s.favorite && <span className="fav-star"><Icon n="star" size={14} fill /></span>}
                 {s.isNew && <span className="tag-new">Nuevo</span>}
+                {s.online && <span className="online-badge">En línea</span>}
               </Cover>
               <span className="card-title">{s.title}</span>
               {s.latest && <span className="ch-chip">{s.latest.number != null ? `Cap. ${s.latest.number}` : s.latest.title}</span>}

@@ -3,6 +3,7 @@
 import { loadSettings } from '../settings.js';
 import { guessSeries, guessNumber, IMG_RE } from '../importers.js';
 import { loadDoc } from './engine.js';
+import { chaptersFromDoc, seriesMeta, finalize, CH_RE } from './chapters.js';
 import { BACKEND, wakeBackend } from '../backend.js';
 
 let autoProxy = '';
@@ -45,16 +46,27 @@ export async function fetchVia(url, as = 'text', referer, trace) {
     try {
       const res = await fetch(target);
       rec.status = res.status;
-      if (!res.ok && res.headers.get('x-manhuua-error')) rec.backend = true; // error del backend, no del sitio
+      if (!res.ok) {
+        // ¿Quién respondió con error? El backend marca sus propios errores; el resto es del sitio.
+        if (res.headers.get('x-manhuua-error')) {
+          rec.source = 'backend';
+          let msg = ''; try { msg = (await res.text()).replace(/^manhuua-proxy:\s*/, ''); try { msg = JSON.parse(msg).error || msg; } catch {} } catch {}
+          throw new Error(`backend ${res.status}${msg ? ': ' + msg.slice(0, 160) : ''}`);
+        }
+        rec.source = 'site';
+        rec.server = res.headers.get('x-upstream-server') || undefined;
+        rec.challenge = res.headers.get('x-upstream-challenge') === '1' || undefined;
+        throw new Error(`HTTP ${res.status}`);
+      }
       if (res.redirected && via === 'directo') rec.finalUrl = res.url;
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const out = as === 'blob' ? await res.blob() : await res.text();
       if (as === 'blob' && out.type.startsWith('text/') && out.size < 2000) throw new Error('respuesta inválida (no es imagen)');
       rec.ok = true; rec.bytes = out.size ?? out.length;
       return out;
     } catch (e) {
       rec.error = e.message === 'Failed to fetch' || e.name === 'TypeError' ? (via === 'directo' ? 'bloqueado (CORS o red)' : 'sin conexión') : e.message;
-      throw Object.assign(new Error(rec.error), { status: rec.status, backend: rec.backend });
+      if (!rec.source) rec.source = rec.status ? 'site' : 'network';
+      throw Object.assign(new Error(rec.error), { status: rec.status, source: rec.source, challenge: rec.challenge, backend: rec.source === 'backend' });
     } finally { rec.ms = Math.round(performance.now() - t0); trace?.push(rec); }
   };
   if (activeProxy()) {
@@ -63,13 +75,13 @@ export async function fetchVia(url, as = 'text', referer, trace) {
       // Con el backend configurado al compilar: si no responde, está ocupado o limitado, se sigue
       // con los caminos de siempre (directo / proxies públicos). Un proxy elegido en Ajustes no cambia.
       const fallback = BACKEND && !loadSettings().proxy?.trim() && (!e.status || (e.backend && [429, 502, 503, 504].includes(e.status)));
-      if (!fallback) throw new Error(`Proxy propio: ${e.message} en ${new URL(url).hostname}`);
+      if (!fallback) throw Object.assign(new Error(`Proxy propio: ${e.message} en ${new URL(url).hostname}`), { status: e.status, source: e.source, challenge: e.challenge });
     }
   }
   let last;
   try { return await attempt('directo', url); } catch (e) {
     last = e;
-    if (e.status) throw new Error(`HTTP ${e.status} en ${new URL(url).hostname}`); // el sitio respondió: un proxy no cambia el resultado
+    if (e.status) throw Object.assign(new Error(`HTTP ${e.status} en ${new URL(url).hostname}`), { status: e.status, source: 'site' }); // el sitio respondió: un proxy no cambia el resultado
     if (!usingPublicProxy()) throw new Error('Bloqueado por CORS: activá el proxy automático o configurá uno en Ajustes');
   }
   for (let k = 0; k < PUBLIC.length; k++) {
@@ -82,63 +94,87 @@ export async function fetchVia(url, as = 'text', referer, trace) {
 
 const IMG_ATTRS = ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-cfsrc', 'data-srcset', 'srcset', 'src'];
 const JUNK = /(logo|avatar|icon|favicon|banner|sprite|emoji|badge|loading|placeholder|spinner|\/ads?\/|pixel)/i;
-const CH_RE = /(cap[ií]tulo|chapter|cap|ch|episodio|episode|ep)[\s._#-]*(\d+(?:\.\d+)?)/i;
 
 function abs(u, base) { try { return new URL(u.trim(), base).href; } catch { return null; } }
 const dirOf = (u) => { try { const x = new URL(u); return x.host + x.pathname.replace(/[^/]*$/, ''); } catch { return ''; } };
+const largestGroup = (list) => {
+  const groups = new Map();
+  list.forEach((u) => groups.set(dirOf(u), [...(groups.get(dirOf(u)) || []), u]));
+  return [...groups.values()].sort((a, b) => b.length - a.length)[0] || [];
+};
 
+/**
+ * Imágenes del contenedor del lector: el elemento más interno que reúne al menos el 80 % de las
+ * imágenes sueltas (no enlazadas). Conserva el orden y admite páginas servidas desde otra carpeta
+ * o CDN (antes solo se tomaba la carpeta más numerosa y se perdían esas páginas).
+ */
+function readerImages(els) {
+  if (els.length < 3) return null;
+  const count = new Map();
+  for (const [img] of els) {
+    let n = img.parentElement, d = 0;
+    while (n && d < 8) { count.set(n, (count.get(n) || 0) + 1); n = n.parentElement; d++; }
+  }
+  const need = Math.max(3, Math.ceil(els.length * 0.8));
+  // Los candidatos están anidados (todos reúnen ≥80 %): se toma el más interno.
+  const cands = [...count.entries()].filter(([, c]) => c >= need).map(([el]) => el);
+  const inner = cands.find((el) => !cands.some((o) => o !== el && el.contains(o)));
+  if (!inner) return null;
+  const box = { el: inner };
+  return [...new Set(els.filter(([img]) => box.el.contains(img)).map(([, u]) => u))];
+}
+
+/**
+ * Analiza una página. Es "capítulo" si tiene imágenes de lectura (≥3, de la misma carpeta y que
+ * no son enlaces a otras páginas, como las portadas); es "serie" si tiene una lista de capítulos.
+ * Las portadas de obras relacionadas ya no convierten una ficha en capítulo.
+ */
 export function extract(html, pageUrl) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const base = doc.querySelector('base[href]')?.getAttribute('href') || pageUrl;
+  const og = doc.querySelector('meta[property="og:image"]')?.getAttribute('content');
+  const ogAbs = og ? abs(og, base) : null;
 
-  // Imágenes en orden de aparición
-  let imgs = [];
+  // Imágenes en orden de aparición, separando las que están dentro de enlaces (portadas, banners).
+  const free = [], linked = [], freeEls = [];
   for (const img of doc.querySelectorAll('img')) {
     for (const a of IMG_ATTRS) {
       let v = img.getAttribute(a);
       if (!v || v.startsWith('data:')) continue;
       if (a.includes('srcset')) v = v.split(',').pop().trim().split(/\s+/)[0];
       const u = abs(v, base);
-      if (u) { imgs.push(u); break; }
+      if (u) {
+        if (img.closest('a[href]')) linked.push(u);
+        else if (!JUNK.test(u) && u !== ogAbs) { free.push(u); freeEls.push([img, u]); }
+        break;
+      }
     }
   }
-  // Respaldo: URLs de imágenes embebidas en scripts/JSON
-  if (imgs.length < 3) {
+  const tidy = (l) => [...new Set(l)].filter((u) => !JUNK.test(u) && u !== ogAbs);
+  let reading = readerImages(freeEls) || largestGroup(tidy(free));
+  const { chapters, strategy, unresolved } = chaptersFromDoc(doc, base, pageUrl);
+  // Respaldo: páginas listadas en scripts/JSON (lectores que arman las imágenes con JavaScript),
+  // solo si la página no es una ficha con lista de capítulos.
+  if (reading.length < 3 && chapters.length < 3) {
     const raw = html.replace(/\\\//g, '/');
-    imgs.push(...(raw.match(/https?:\/\/[^"'\s<>()]+?\.(?:jpe?g|png|webp|avif|gif)(?:\?[^"'\s<>()]*)?/gi) || []));
+    const fromScripts = largestGroup(tidy(raw.match(/https?:\/\/[^"'\s<>()]+?\.(?:jpe?g|png|webp|avif|gif)(?:\?[^"'\s<>()]*)?/gi) || []).filter((u) => !linked.includes(u)));
+    if (fromScripts.length >= 3) reading = fromScripts;
   }
-  imgs = [...new Set(imgs)].filter((u) => !JUNK.test(u));
-  // Quedarse con el grupo (carpeta) más numeroso: suelen ser las páginas del capítulo
-  const groups = new Map();
-  imgs.forEach((u) => groups.set(dirOf(u), [...(groups.get(dirOf(u)) || []), u]));
-  const best = [...groups.values()].sort((a, b) => b.length - a.length)[0] || [];
-  if (best.length >= 3) imgs = best;
-
-  // Enlaces a capítulos
-  const seen = new Set(), chapters = [];
-  for (const a of doc.querySelectorAll('a[href]')) {
-    const href = abs(a.getAttribute('href'), base);
-    if (!href || seen.has(href) || href.split('#')[0] === pageUrl.split('#')[0]) continue;
-    const text = a.textContent.replace(/\s+/g, ' ').trim();
-    const m = text.match(CH_RE) || decodeURIComponent(new URL(href).pathname).match(CH_RE);
-    if (!m) continue;
-    seen.add(href);
-    chapters.push({ url: href, title: text.slice(0, 80) || `Capítulo ${m[2]}`, number: parseFloat(m[2]) });
-  }
-  chapters.sort((a, b) => a.number - b.number);
-
-  const rawTitle = doc.querySelector('meta[property="og:title"]')?.content || doc.querySelector('h1')?.textContent || doc.title || new URL(pageUrl).pathname;
-  const title = rawTitle.replace(/\s+/g, ' ').split(/\s[|–—]\s|\s-\s(?=[^-]*$)/)[0].trim();
-  const isChapter = imgs.length >= 3;
-  const og = doc.querySelector('meta[property="og:image"]')?.getAttribute('content');
+  const isChapter = reading.length >= 3;
+  const meta = seriesMeta(doc, base);
+  const title = (meta.title || new URL(pageUrl).pathname).replace(/\s+/g, ' ').split(/\s[|–—]\s|\s-\s(?=[^-]*$)/)[0].trim();
+  const own = CH_RE.exec(title) || CH_RE.exec(decodeURIComponent(new URL(pageUrl).pathname));
   return {
     url: pageUrl,
     title,
     series: isChapter ? guessSeries(title) : title,
-    number: isChapter ? (title.match(CH_RE) ? parseFloat(title.match(CH_RE)[2]) : guessNumber(pageUrl.replace(/\/$/, ''))) : null,
-    images: imgs,
-    cover: !isChapter && og ? abs(og, base) : null,
-    chapters: isChapter ? [] : chapters,
+    number: isChapter ? (own ? parseFloat(own[2].replace(',', '.')) : guessNumber(pageUrl.replace(/\/$/, ''))) : null,
+    images: isChapter ? reading : [],
+    cover: !isChapter ? meta.cover : null,
+    chapters: isChapter ? [] : finalize(chapters),
+    chaptersStrategy: strategy,
+    unresolvedChapters: unresolved,
+    meta,
     kind: isChapter ? 'chapter' : chapters.length ? 'series' : 'empty',
   };
 }

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { getExtension, browse, seriesDetail } from '../sources/extensions.js';
 import { activeProxy, usingPublicProxy } from '../sources/web.js';
 import { enqueue, useDownloads } from '../downloads.js';
-import { useDb, getAll } from '../db.js';
+import { useDb, getAll, byIndex } from '../db.js';
+import { followSeries } from '../online.js';
 import { Icon, Cover, BgCover, Favicon, go } from '../ui.jsx';
 
 const NoProxy = () => !activeProxy() && !usingPublicProxy() && (
@@ -10,7 +11,7 @@ const NoProxy = () => !activeProxy() && !usingPublicProxy() && (
 );
 
 /** Panel de diagnóstico de una carga de extensión. */
-export function DiagPanel({ ext, diag, open, onToggle }) {
+export function DiagPanel({ ext, diag, open, onToggle, what = 'Obras' }) {
   if (!diag) return null;
   const ok = diag.attempts?.some((a) => a.ok) || diag.render?.html || diag.via === 'catalogo JSON';
   const rows = [
@@ -23,7 +24,10 @@ export function DiagPanel({ ext, diag, open, onToggle }) {
     diag.bytes != null && ['HTML', `${Math.round(diag.bytes / 1024)} KB · ${diag.textChars} caracteres de texto · ${diag.scripts} scripts${diag.spaRoot ? ` · contenedor SPA ${diag.spaRoot}` : ''}`],
     diag.embedded?.length && ['Datos embebidos', diag.embedded.join(', ')],
     diag.strategy && ['Método de extracción', diag.strategy],
-    ['Obras detectadas', diag.count ?? 0],
+    [`${what} detectad${what.endsWith('s') && what !== 'Obras' ? 'os' : 'as'}`, diag.count ?? 0],
+    diag.pages > 1 && ['Páginas de la lista', diag.pages],
+    diag.errorSource && ['Origen del error', { site: 'la fuente (el sitio respondió con error)', backend: 'el backend (Render)', network: 'red / sin respuesta' }[diag.errorSource] + (diag.httpStatus ? ` · HTTP ${diag.httpStatus}` : '')],
+    diag.renderSkipped && ['Renderizado', `no se intentó: ${diag.renderSkipped}`],
     diag.covers != null && ['Portadas detectadas', diag.covers],
     diag.links != null && ['Enlaces / imágenes en la página', `${(diag.rendered || diag).links} / ${(diag.rendered || diag).imgs}`],
     diag.staticCount != null && diag.renderCount != null && ['Estático vs renderizado', `${diag.staticCount} → ${diag.renderCount}`],
@@ -39,6 +43,11 @@ export function DiagPanel({ ext, diag, open, onToggle }) {
       {open && <dl className="diag-table">{rows.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{String(v)}</dd></div>)}</dl>}
     </div>
   );
+}
+
+function DiagBox({ startOpen = false, ...p }) {
+  const [open, setOpen] = useState(startOpen);
+  return <DiagPanel {...p} open={open} onToggle={() => setOpen(!open)} />;
 }
 
 export function ExtensionHome({ extId }) {
@@ -85,8 +94,9 @@ export function ExtensionHome({ extId }) {
       <div className="grid">
         {items.map((it) => (
           <a key={it.url} className="card" href={`#/ext/${ext.id}/s/${encodeURIComponent(it.url)}`} onClick={() => sessionStorage.setItem('mh.pick', JSON.stringify(it))}>
-            <Cover src={it.cover} title={it.title} referer={ext.url} />
+            <Cover src={it.cover} title={it.title} referer={ext.url}>{it.status && <span className="kind">{it.status}</span>}</Cover>
             <span className="card-title">{it.title}</span>
+            {it.author && <span className="muted small card-sub">{it.author}</span>}
           </a>
         ))}
       </div>
@@ -96,38 +106,64 @@ export function ExtensionHome({ extId }) {
   );
 }
 
+const fmtDate = (c) => (c.date ? new Date(c.date + 'T12:00:00').toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' }) : c.dateText || '');
+const norm = (u = '') => u.replace(/\/+(?=#|$)/, '');
+
 export function RemoteSeries({ extId, url }) {
   const ext = getExtension(extId);
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState('');
   const jobs = useDownloads();
+  // Estado local de esta obra: si ya está en la biblioteca, sus capítulos (descargados o en línea) y el progreso.
   const lib = useDb(async () => {
-    const [series, chapters] = await Promise.all([getAll('series'), getAll('chapters')]);
-    return { series, urls: new Set(chapters.map((c) => c.url).filter(Boolean)) };
-  });
+    const series = (await getAll('series')).find((s) => s.sourceUrl === url) || null;
+    const chapters = series ? await byIndex('chapters', 'seriesId', series.id) : [];
+    const progress = series ? await byIndex('progress', 'seriesId', series.id) : [];
+    return { series, byUrl: new Map(chapters.map((c) => [norm(c.url), c])), prog: new Map(progress.map((p) => [p.chapterId, p])) };
+  }, [url]);
 
-  useEffect(() => {
+  const loadDetail = () => {
     let fb = {};
     try { fb = JSON.parse(sessionStorage.getItem('mh.pick')) || {}; } catch {}
     if (fb.url !== url) fb = {};
+    setErr(''); setD(null);
     ext && seriesDetail(ext, url, fb).then(setD).catch((e) => setErr(e.message));
-  }, [extId, url]); // eslint-disable-line
+  };
+  useEffect(loadDetail, [extId, url]); // eslint-disable-line
   if (!ext) return <div className="page"><p className="empty">Extensión no encontrada.</p></div>;
 
-  const inLib = lib?.series.find((s) => s.sourceUrl === url);
   const queued = new Set(jobs.filter((j) => j.status !== 'error').map((j) => j.url));
-  const job = (c) => ({ url: c.url, title: c.title, number: c.number, images: c.images, series: d.title, cover: d.cover, sourceUrl: url.startsWith('http') ? url : undefined });
-  const pending = d ? d.chapters.filter((c) => !lib?.urls.has(c.url) && !queued.has(c.url)) : [];
+  const job = (c) => ({ url: c.url, title: c.title, number: c.number, images: c.images, series: lib?.series?.title || d.title, cover: d.cover, sourceUrl: url.startsWith('http') ? url : undefined });
+  const local = (c) => lib?.byUrl.get(norm(c.url));
+  const downloaded = (c) => { const l = local(c); return l && !l.online; };
+  const pending = d ? d.chapters.filter((c) => !downloaded(c) && !queued.has(c.url)) : [];
+  const last = lib?.series?.lastChapterId && [...(lib.byUrl.values())].find((c) => c.id === lib.series.lastChapterId);
+
+  /** Abre el lector: guarda la obra y la lista de capítulos (sin imágenes) y va al capítulo. */
+  const read = async (c) => {
+    setBusy(c.url);
+    try {
+      const { idByUrl } = await followSeries(ext, url, d);
+      go(`/r/${idByUrl.get(norm(c.url))}`);
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(''); }
+  };
+  const resume = last && d?.chapters.find((c) => norm(c.url) === norm(last.url));
+  const first = d?.chapters[0];
 
   return (
     <div className="page">
       <header className="top">
         <button className="icon-btn" onClick={() => history.back()} aria-label="Volver"><Icon n="back" /></button>
-        <div className="actions"><a className="icon-btn" href={url.startsWith('http') ? url : ext.url} target="_blank" rel="noreferrer" title="Abrir en el sitio"><Icon n="globe" /></a></div>
+        <div className="actions">
+          <button className="icon-btn" onClick={loadDetail} title="Recargar"><Icon n="refresh" /></button>
+          <a className="icon-btn" href={url.startsWith('http') ? url : ext.url} target="_blank" rel="noreferrer" title="Abrir en el sitio"><Icon n="globe" /></a>
+        </div>
       </header>
       <NoProxy />
       {err && <p className="error">{err}</p>}
-      {!d && !err && <p className="muted center">Cargando…</p>}
+      {!d && !err && <p className="muted center">Cargando ficha y capítulos…</p>}
       {d && (
         <>
           <div className="hero">
@@ -135,28 +171,40 @@ export function RemoteSeries({ extId, url }) {
             <Cover src={d.cover} title={d.title} referer={ext.url} />
             <div>
               <h1>{d.title}</h1>
-              <p className="muted">{d.chapters.length} capítulos · {ext.name}</p>
+              <div className="meta-row muted">
+                {d.author && <span><b>Autor:</b> {d.author}</span>}
+                {d.artist && d.artist !== d.author && <span><b>Arte:</b> {d.artist}</span>}
+                {d.status && <span className={'status-chip' + (d.status === 'Finalizado' ? ' fin' : '')}>{d.status}</span>}
+                <span>{d.chapters.length} capítulos · {ext.name}</span>
+              </div>
+              {d.genres?.length > 0 && <div className="genres">{d.genres.map((g) => <span key={g}>{g}</span>)}</div>}
               {d.description && <p className="desc">{d.description}</p>}
               <div className="row">
-                {pending.length > 0 && <button className="btn primary" onClick={() => enqueue(pending.map(job))}><Icon n="down" size={16} /> Descargar {pending.length === d.chapters.length ? 'todo' : `${pending.length} faltantes`}</button>}
-                {inLib && <button className="btn" onClick={() => go(`/s/${inLib.id}`)}><Icon n="book" size={16} /> En biblioteca</button>}
+                {first && <button className="btn primary" disabled={!!busy} onClick={() => read(resume || first)}><Icon n="book" size={16} /> {resume ? `Continuar: ${resume.title}` : 'Comenzar a leer'}</button>}
+                {pending.length > 0 && <button className="btn" onClick={() => enqueue(pending.map(job))}><Icon n="down" size={16} /> Descargar {pending.length === d.chapters.length ? 'todo' : `${pending.length} faltantes`}</button>}
+                {lib?.series && <button className="btn" onClick={() => go(`/s/${lib.series.id}`)}><Icon n="book" size={16} /> En biblioteca</button>}
               </div>
             </div>
           </div>
-          <h3 className="sec">Capítulos</h3>
-          {!d.chapters.length && <DiagPanel ext={ext} diag={d.diag} open={false} onToggle={() => {}} />}
+          <h3 className="sec">Capítulos {d.chapters.length > 0 && <span className="muted small">({d.chapters.length})</span>}</h3>
+          {!d.chapters.length && <DiagBox ext={ext} diag={d.diag} what="Capítulos" startOpen />}
           <ul className="chapters">
             {[...d.chapters].reverse().map((c) => {
-              const have = lib?.urls.has(c.url), q = queued.has(c.url);
+              const l = local(c), p = l && lib.prog.get(l.id), have = downloaded(c), q = queued.has(c.url);
+              const state = [fmtDate(c), have ? 'descargado' : q ? 'en cola' : '', p?.done ? 'leído' : p ? `pág. ${p.page + 1}/${p.total}` : ''].filter(Boolean).join(' · ');
               return (
-                <li key={c.url} className={have ? 'read' : ''}>
-                  <span className="ch-link"><span className="ch-title">{c.title}</span><span className="muted small">{have ? 'descargado' : q ? 'en cola' : ''}</span></span>
+                <li key={c.url} className={(p?.done ? 'read' : '') + (l && l.id === lib.series?.lastChapterId ? ' reading' : '')}>
+                  <button className="ch-btn" onClick={() => read(c)} disabled={!!busy} title="Leer">
+                    <span className="ch-title">{busy === c.url ? 'Abriendo…' : c.title}</span>
+                    {state && <span className="muted small">{state}</span>}
+                  </button>
                   {!have && !q && <button className="icon-btn" title="Descargar" onClick={() => enqueue(job(c))}><Icon n="down" /></button>}
                   {have && <Icon n="check" />}
                 </li>
               );
             })}
           </ul>
+          {d.chapters.length > 0 && d.diag && <DiagBox ext={ext} diag={d.diag} what="Capítulos" />}
         </>
       )}
     </div>

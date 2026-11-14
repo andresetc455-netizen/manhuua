@@ -53,7 +53,9 @@ export async function render(url, kind = 'catalog', { maxMs = 20000, allowPrivat
     if (ANTIBOT.test(title)) return { status, finalUrl: page.url(), html: await page.content(), jsErrors, antibot: true, wait: { reason: 'verificación antibots detectada' } };
     // Espera por condición: suficientes elementos útiles y el DOM sin cambios durante 700 ms.
     const wait = await page.evaluate(({ kind, maxMs }) => new Promise((resolve) => {
-      const sel = kind === 'chapter' ? 'img' : 'a[href] img, a[href] picture, a[href] [style*="background-image"], [class*="card"] img, article img, li img';
+      const sel = kind === 'chapter' ? 'img'
+        : kind === 'series' ? 'a[href*="cap" i], a[href*="chapter" i], a[href*="episod" i], a[href*="/ep-" i], [class*="chapter" i] a[href], [class*="capitulo" i] a[href]'
+        : 'a[href] img, a[href] picture, a[href] [style*="background-image"], [class*="card"] img, article img, li img';
       const min = kind === 'chapter' ? 3 : 2;
       const t0 = performance.now();
       let last = performance.now();

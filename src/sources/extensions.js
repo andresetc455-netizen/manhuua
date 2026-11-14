@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { fetchVia, extract } from './web.js';
 import { loadDoc, explain } from './engine.js';
 import { itemsFromJson, embeddedJson } from './jsonwalk.js';
+import { chaptersFromJson, chaptersFromDoc, nextChaptersPage, nextJsonPage, metaFromJson, finalize } from './chapters.js';
 import { catalogSource } from './catalog.js';
 
 const KEY = 'manhuua.extensions';
@@ -163,23 +164,72 @@ export async function browse(ext, { url, query, page = 1 } = {}) {
   return { ...res, diag };
 }
 
-/** Detalle de una serie de la extensión: título, portada, capítulos. */
+const looksJson = (t) => /^\s*[[{]/.test(t || '');
+function countChapters(h, u) {
+  if (looksJson(h)) { try { return chaptersFromJson(JSON.parse(h), u).chapters.length; } catch { return 0; } }
+  const i = extract(h, u);
+  return i.chapters.length || (i.images.length >= 3 ? 1 : 0);
+}
+const MAX_PAGES = 20;
+
+/**
+ * Detalle de una obra: datos (título, portada, descripción, autor, estado, géneros) y la lista
+ * completa de capítulos (HTML, datos embebidos, API JSON; sigue la paginación de la lista).
+ * Nunca inventa capítulos: si la fuente no los da, devuelve la lista vacía con el diagnóstico.
+ */
 export async function seriesDetail(ext, url, fallback = {}) {
   if (ext.type === 'catalog') {
     const id = url.replace(/^catalog:/, '');
     const src = catalogSource(ext);
     const s = (await src.search('')).find((x) => x.remoteId === id) || {};
     const chs = await src.chapters(id);
-    return { title: s.title, cover: s.cover, description: s.description, chapters: chs.map((c) => ({ url: `${ext.url}#${id}/${c.remoteId}`, title: c.title, number: c.number, images: c.pages })) };
+    return { title: s.title, cover: s.cover, description: s.description, genres: [], chapters: finalize(chs.map((c) => ({ url: `${ext.url}#${id}/${c.remoteId}`, title: c.title, number: c.number, images: c.pages }))), diag: { via: 'catálogo JSON', count: chs.length, reasons: chs.length ? [] : ['El catálogo no lista capítulos para esta obra.'] } };
   }
-  const { html, base, diag } = await loadDoc(url, { kind: 'series', count: (h, u) => { const i = extract(h, u); return i.chapters.length || (i.images.length >= 3 ? 1 : 0); } });
-  const info = extract(html, base);
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const description = (doc.querySelector('meta[property="og:description"], meta[name="description"]')?.content || '').trim();
-  const og = doc.querySelector('meta[property="og:image"]')?.content;
-  const cover = (og && new URL(og, base).href) || fallback.cover;
-  diag.count = info.chapters.length;
-  diag.reasons = info.chapters.length || info.kind === 'chapter' ? [] : explain(diag, 'capítulos');
-  if (info.kind === 'chapter') return { title: info.series, cover, description, diag, chapters: [{ url, title: info.title, number: info.number, images: info.images }] };
-  return { title: fallback.title || info.title, cover, description, diag, chapters: info.chapters };
+  const { html, base, diag } = await loadDoc(url, { kind: 'series', count: countChapters });
+  let out, next, strategy;
+  if (looksJson(html)) {
+    let data; try { data = JSON.parse(html); } catch { data = null; }
+    const r = data ? chaptersFromJson(data, base) : { chapters: [], unresolved: 0 };
+    const m = data ? metaFromJson(data, fallback.title) : {};
+    out = { title: m.title || fallback.title, cover: fallback.cover, description: m.description, author: m.author, status: m.status, genres: m.genres || [], chapters: r.chapters, unresolved: r.unresolved };
+    strategy = r.chapters.length ? `API JSON → ${r.path}` : '';
+    next = data && nextJsonPage(data, base);
+    for (let p = 1; next && p < MAX_PAGES; p++) {
+      try {
+        const d = JSON.parse(await fetchVia(next));
+        const more = chaptersFromJson(d, next).chapters.filter((c) => !out.chapters.some((x) => x.url === c.url));
+        if (!more.length) break;
+        out.chapters.push(...more); diag.pages = p + 1;
+        next = nextJsonPage(d, next);
+      } catch (e) { diag.pageError = e.message; break; }
+    }
+  } else {
+    const info = extract(html, base);
+    const m = info.meta;
+    out = { title: fallback.title || m.title || info.title, cover: m.cover || fallback.cover, description: m.description, author: m.author, artist: m.artist, status: m.status, genres: m.genres || [], chapters: info.chapters, unresolved: info.unresolvedChapters };
+    strategy = info.chaptersStrategy;
+    if (info.kind === 'chapter') {
+      // La URL agregada es un capítulo (real) y no una ficha: se ofrece ese único capítulo.
+      out.title = info.series; out.chapters = [{ url, title: info.title, number: info.number, images: info.images }]; strategy = 'la URL es un capítulo';
+    } else {
+      next = nextChaptersPage(new DOMParser().parseFromString(html, 'text/html'), base, base);
+      for (let p = 1; next && p < MAX_PAGES; p++) {
+        try {
+          const h = await fetchVia(next);
+          const doc = new DOMParser().parseFromString(h, 'text/html');
+          const more = chaptersFromDoc(doc, next, next).chapters.filter((c) => !out.chapters.some((x) => x.url === c.url));
+          if (!more.length) break;
+          out.chapters.push(...more); diag.pages = p + 1;
+          next = nextChaptersPage(doc, next, next);
+        } catch (e) { diag.pageError = e.message; break; }
+      }
+    }
+  }
+  out.chapters = finalize(out.chapters);
+  diag.count = out.chapters.length;
+  diag.strategy = strategy;
+  diag.reasons = out.chapters.length ? [] : explain(diag, 'capítulos');
+  if (!out.chapters.length && out.unresolved) diag.reasons.unshift(`La página tiene datos de ${out.unresolved} capítulos pero sin su dirección (URL). Manhuua no inventa enlaces: probá con la URL de la lista de capítulos del sitio.`);
+  if (diag.pageError) diag.reasons.push(`No se pudo cargar una página siguiente de la lista: ${diag.pageError}`);
+  return { ...out, diag };
 }

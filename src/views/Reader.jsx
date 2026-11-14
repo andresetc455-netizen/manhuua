@@ -4,6 +4,39 @@ import { byNumber, loadPages, saveProgress, updateSeries } from '../library.js';
 import { translatePage, clearTranslations, fitFont } from '../translate.js';
 import { useSettings } from '../settings.js';
 import { Icon } from '../ui.jsx';
+import { activeProxy, proxied, fetchVia } from '../sources/web.js';
+
+/**
+ * Una página del lector. En capítulos en línea intenta primero la imagen directa (sin gastar el
+ * backend); si falla, la pide por el proxy. Si tampoco carga, muestra un error con "Reintentar".
+ */
+function PageImg({ src, i, online, referer, eager, className, onLoad, onError }) {
+  const [url, setUrl] = useState(src);
+  const [stage, setStage] = useState(0); // 0 directa · 1 proxy · 2 error
+  const [why, setWhy] = useState('');
+  const blob = useRef(null);
+  const drop = () => { if (blob.current) { URL.revokeObjectURL(blob.current); blob.current = null; } };
+  useEffect(() => { drop(); setUrl(src); setStage(0); setWhy(''); return drop; }, [src]);
+  const fail = async () => {
+    if (online && stage === 0) {
+      if (activeProxy()) { setStage(1); setUrl(proxied(src, referer)); return; }
+      try { const b = await fetchVia(src, 'blob', referer); drop(); blob.current = URL.createObjectURL(b); setStage(1); setUrl(blob.current); return; }
+      catch (e) { setWhy(e.message); }
+    }
+    setStage(2); onError?.();
+  };
+  if (stage === 2) {
+    let host = ''; try { host = new URL(src).host; } catch {}
+    return (
+      <div className="pg-err" data-i={i} onClick={(e) => e.stopPropagation()}>
+        <b>No se pudo cargar la página {i + 1}</b>
+        <span className="muted small">{why || (online ? `La imagen no respondió (${host}).` : 'La imagen guardada está dañada.')}</span>
+        <button className="btn sm" onClick={() => { drop(); setWhy(''); setStage(0); setUrl(src); }}>Reintentar</button>
+      </div>
+    );
+  }
+  return <img className={className} src={url} alt={`Página ${i + 1}`} loading={eager ? 'eager' : 'lazy'} decoding="async" referrerPolicy="no-referrer" onLoad={onLoad} onError={fail} />;
+}
 
 function useWakeLock(on) {
   useEffect(() => {
@@ -43,7 +76,7 @@ function TrOverlay({ data }) {
   );
 }
 
-function Vertical({ urls, start, gap, maxWidth, onPage, onTap, footer, jumpRef, tr }) {
+function Vertical({ urls, start, gap, maxWidth, onPage, onTap, footer, jumpRef, tr, online, referer }) {
   const refs = useRef([]);
   const ready = useRef(start === 0);
   const loaded = useRef(0);
@@ -61,7 +94,7 @@ function Vertical({ urls, start, gap, maxWidth, onPage, onTap, footer, jumpRef, 
   jumpRef.current = (i) => refs.current[i]?.scrollIntoView({ block: 'start' });
 
   const settle = (i, ok) => (e) => {
-    if (ok) e.currentTarget.classList.add('ok');
+    if (ok && e) e.currentTarget.classList.add('ok');
     if (!ready.current && i <= start && ++loaded.current > start) {
       refs.current[start]?.scrollIntoView({ block: 'start' });
       ready.current = true;
@@ -70,9 +103,8 @@ function Vertical({ urls, start, gap, maxWidth, onPage, onTap, footer, jumpRef, 
   return (
     <div className="vertical" style={{ '--gap': gap + 'px', '--mw': maxWidth ? maxWidth + 'px' : 'none' }} onClick={onTap}>
       {urls.map((u, i) => (
-        <div key={u} ref={(el) => (refs.current[i] = el)} data-i={i} className="pgw">
-          <img className="pg" src={u} alt={`Página ${i + 1}`}
-            loading={i <= start + 2 ? 'eager' : 'lazy'} decoding="async" referrerPolicy="no-referrer" onLoad={settle(i, true)} onError={settle(i, false)} />
+        <div key={i} ref={(el) => (refs.current[i] = el)} data-i={i} className="pgw">
+          <PageImg className="pg" src={u} i={i} online={online} referer={referer} eager={i <= start + 2} onLoad={settle(i, true)} onError={() => settle(i, false)()} />
           {tr?.[i]?.items && <TrOverlay data={tr[i]} />}
         </div>
       ))}
@@ -81,7 +113,7 @@ function Vertical({ urls, start, gap, maxWidth, onPage, onTap, footer, jumpRef, 
   );
 }
 
-function Paged({ urls, cur, setCur, dir, fit, onTap, onEnd, tr }) {
+function Paged({ urls, cur, setCur, dir, fit, onTap, onEnd, tr, online, referer }) {
   const touch = useRef(null);
   const go = useCallback((d) => {
     const n = cur + d;
@@ -110,7 +142,7 @@ function Paged({ urls, cur, setCur, dir, fit, onTap, onEnd, tr }) {
       onTouchStart={(e) => (touch.current = e.touches[0].clientX)}
       onTouchEnd={(e) => { const dx = e.changedTouches[0].clientX - touch.current; if (Math.abs(dx) > 60) go(flip(dx < 0 ? 1 : -1)); }}>
       <div className="pgw-paged">
-        <img src={urls[cur]} alt={`Página ${cur + 1}`} referrerPolicy="no-referrer" />
+        <PageImg src={urls[cur]} i={cur} online={online} referer={referer} eager />
         {tr?.[cur]?.items && <TrOverlay data={tr[cur]} />}
       </div>
       {urls[cur + 1] && <link rel="preload" as="image" href={urls[cur + 1]} />}
@@ -130,6 +162,7 @@ export default function Reader({ chapterId }) {
   const [trMsg, setTrMsg] = useState('');
   const curRef = useRef(0);
   curRef.current = cur;
+  const [reload, setReload] = useState(0);
   useWakeLock(s.keepAwake);
 
   useEffect(() => {
@@ -138,25 +171,34 @@ export default function Reader({ chapterId }) {
       const chapter = await get('chapters', chapterId);
       if (!chapter) return setSt({ missing: true });
       const [series, list, prog] = await Promise.all([get('series', chapter.seriesId), byIndex('chapters', 'seriesId', chapter.seriesId), get('progress', chapterId)]);
-      const pages = await loadPages(chapter);
+      list.sort(byNumber);
+      if (!chapter.pageCount && !chapter.remotePages) setSt({ chapter, series, list, loading: true });
+      let pages;
+      try { pages = await loadPages(chapter, { force: reload > 0 }); }
+      catch (e) { if (alive) setSt({ chapter, series, list, error: e }); return; }
       dispose = pages.dispose;
       if (!alive) return dispose();
-      list.sort(byNumber);
+      if (!pages.urls.length) return setSt({ chapter, series, list, error: new Error('El capítulo no tiene páginas.') });
       const start = prog && !prog.done ? Math.min(prog.page, pages.urls.length - 1) : 0;
       setCur(start);
       setEnd(false);
-      setSt({ chapter, series, list, urls: pages.urls, start });
+      setSt({ chapter, series, list, urls: pages.urls, start, online: !!pages.online, referer: pages.referer });
+      saveProgress(chapter, start, pages.urls.length); // recuerda el último capítulo abierto al instante
       setTr({}); setTrMsg('');
       setTrOn(!!series?.translate);
     })();
     return () => { alive = false; dispose?.(); };
-  }, [chapterId]);
+  }, [chapterId, reload]);
 
+  const lastPos = useRef(null);
   useEffect(() => {
-    if (!st?.chapter) return;
-    const t = setTimeout(() => saveProgress(st.chapter, cur, st.urls.length), 350);
+    if (!st?.urls) return;
+    lastPos.current = { chapter: st.chapter, page: cur, total: st.urls.length };
+    const t = setTimeout(() => { saveProgress(st.chapter, cur, st.urls.length); lastPos.current = null; }, 350);
     return () => clearTimeout(t);
   }, [cur, st]);
+  // Al salir del lector (o cambiar de capítulo) se guarda la última posición aunque no haya pasado la espera.
+  useEffect(() => () => { const l = lastPos.current; if (l) saveProgress(l.chapter, l.page, l.total); }, []);
 
   // Traducción: procesa primero la página actual y luego las más cercanas
   useEffect(() => {
@@ -172,7 +214,9 @@ export default function Reader({ chapterId }) {
         }
         if (i < 0) break;
         setTrMsg(`Traduciendo ${k + 1}/${n}…`);
-        try { done[i] = await translatePage(st.chapter.id, i, st.urls[i]); }
+        // Páginas en línea: el OCR necesita leer la imagen, así que se pide por el proxy si hay uno.
+        const src = st.online && activeProxy() ? proxied(st.urls[i], st.referer) : st.urls[i];
+        try { done[i] = await translatePage(st.chapter.id, i, src); }
         catch (e) { done[i] = { error: e.message }; if (/límite|limit|quota|fetch/i.test(e.message)) { setTrMsg('Error: ' + e.message); alive && setTr({ ...done }); return; } }
         if (alive) setTr({ ...done });
       }
@@ -198,6 +242,33 @@ export default function Reader({ chapterId }) {
   const prev = st.list[idx - 1], next = st.list[idx + 1];
   const open = (c) => c && location.replace(`#/r/${c.id}`);
   const back = () => location.replace(`#/s/${st.chapter.seriesId}`);
+  if (st.loading || st.error) {
+    const reasons = st.error?.diag?.reasons || [];
+    return (
+      <div className="reader">
+        <header className="r-top">
+          <button className="icon-btn" onClick={back} aria-label="Volver"><Icon n="back" /></button>
+          <div className="r-title"><b>{st.series?.title}</b><span>{st.chapter.title}</span></div>
+        </header>
+        <div className="r-state">
+          {st.loading ? <p className="muted">Cargando el capítulo desde la fuente…</p> : (
+            <>
+              <p className="error">No se pudo abrir el capítulo: {st.error.message}</p>
+              {reasons.map((r, k) => <p key={k} className="muted small">{r}</p>)}
+              <div className="row">
+                <button className="btn primary" onClick={() => setReload((n) => n + 1)}>Reintentar</button>
+                {/^https?:/.test(st.chapter.url || '') && <a className="btn" href={st.chapter.url} target="_blank" rel="noreferrer">Abrir en el sitio</a>}
+              </div>
+            </>
+          )}
+          <div className="row">
+            <button className="btn" disabled={!prev} onClick={() => open(prev)}>Anterior</button>
+            <button className="btn" disabled={!next} onClick={() => open(next)}>Siguiente</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
   const n = st.urls.length;
   const endBox = (
     <div className="chapter-end">
@@ -223,8 +294,8 @@ export default function Reader({ chapterId }) {
       </header>
 
       {s.mode === 'vertical'
-        ? <Vertical key={chapterId} urls={st.urls} start={st.start} gap={s.gap} maxWidth={s.maxWidth} onPage={onPage} onTap={toggle} footer={endBox} jumpRef={jump} tr={trOn ? tr : null} />
-        : <Paged urls={st.urls} cur={cur} setCur={setCur} dir={s.dir} fit={s.fit} onTap={toggle} onEnd={() => { saveProgress(st.chapter, n - 1, n); setEnd(true); }} tr={trOn ? tr : null} />}
+        ? <Vertical key={chapterId + ':' + reload} urls={st.urls} start={st.start} gap={s.gap} maxWidth={s.maxWidth} onPage={onPage} onTap={toggle} footer={endBox} jumpRef={jump} tr={trOn ? tr : null} online={st.online} referer={st.referer} />
+        : <Paged urls={st.urls} cur={cur} setCur={setCur} dir={s.dir} fit={s.fit} onTap={toggle} onEnd={() => { saveProgress(st.chapter, n - 1, n); setEnd(true); }} tr={trOn ? tr : null} online={st.online} referer={st.referer} />}
 
       {trOn && trMsg && <div className="tr-status">{trMsg}</div>}
 

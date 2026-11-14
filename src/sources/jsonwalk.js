@@ -7,6 +7,8 @@ const URL_KEYS = /^(url|href|link|permalink|path|canonical_?url)$/i;
 const SLUG_KEYS = /^(slug|uri|handle|seo_?url)$/i;
 const IMG_EXT = /\.(jpe?g|png|webp|avif|gif)(\?|#|$)/i;
 
+import { normStatus } from './status.js';
+
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 
 /** Hidrata el formato "devalue" que usa Nuxt 3 en <script id="__NUXT_DATA__">. */
@@ -68,7 +70,10 @@ function itemOf(o) {
   if (!title && isObj(o.attributes)) return itemOf({ ...o.attributes, id: o.id });
   if (!title && isObj(o.item)) return itemOf(o.item);
   const cover = pickImage(o);
-  return title ? { title, cover, url, slug, id: o.id ?? o._id } : null;
+  const status = typeof (o.status ?? o.estado) === 'string' ? (o.status ?? o.estado).trim() : undefined;
+  const a = o.author ?? o.authors ?? o.autor;
+  const author = typeof a === 'string' ? a.trim() : Array.isArray(a) ? a.map((x) => (typeof x === 'string' ? x : x?.name)).filter(Boolean).join(', ') : undefined;
+  return title ? { title, cover, url, slug, id: o.id ?? o._id, status, author } : null;
 }
 
 /** Recorre el JSON y devuelve los arreglos que parecen listas de obras, del mejor al peor. */
@@ -109,7 +114,7 @@ export function itemsFromJson(data, base, { urlTemplate } = {}) {
     if (!url && it.slug) url = abs(it.slug.startsWith('/') ? it.slug : `/${it.slug}`);
     if (!url || seen.has(url)) continue;
     seen.add(url);
-    items.push({ url, title: it.title.slice(0, 90), cover: it.cover ? abs(it.cover) : null });
+    items.push({ url, title: it.title.slice(0, 90), cover: it.cover ? abs(it.cover) : null, ...(it.status && normStatus(it.status) && { status: normStatus(it.status) }), ...(it.author && { author: it.author.slice(0, 60) }) });
   }
   return { items, path: best.path };
 }
