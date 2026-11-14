@@ -21,12 +21,42 @@ export function proxied(url, referer) {
   return p + encodeURIComponent(url) + (referer ? '&referer=' + encodeURIComponent(referer) : '');
 }
 
-export async function fetchVia(url, as = 'text', referer) {
-  let res;
-  try { res = await fetch(proxied(url, referer)); }
-  catch { throw new Error(activeProxy() ? 'No se pudo conectar con el proxy' : 'Bloqueado por CORS: configurá un proxy en Ajustes'); }
+// Proxies CORS públicos que se usan automáticamente si no hay uno propio configurado.
+const PUBLIC = [
+  (u) => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+  (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+  (u) => 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u),
+];
+let preferred = 0;
+export const usingPublicProxy = () => !activeProxy() && loadSettings().publicProxy !== false;
+
+async function readAs(res, as, url) {
   if (!res.ok) throw new Error(`HTTP ${res.status} en ${new URL(url).hostname}`);
   return as === 'blob' ? res.blob() : res.text();
+}
+
+export async function fetchVia(url, as = 'text', referer) {
+  if (activeProxy()) {
+    let res;
+    try { res = await fetch(proxied(url, referer)); } catch { throw new Error('No se pudo conectar con el proxy configurado'); }
+    return readAs(res, as, url);
+  }
+  // 1) directo (funciona si el sitio permite CORS)
+  try { return await readAs(await fetch(url), as, url); } catch (e) { if (!usingPublicProxy()) throw new Error('Bloqueado por CORS: activá el proxy automático o configurá uno en Ajustes'); }
+  // 2) proxies públicos, empezando por el último que funcionó
+  let last;
+  for (let k = 0; k < PUBLIC.length; k++) {
+    const i = (preferred + k) % PUBLIC.length;
+    try {
+      const res = await fetch(PUBLIC[i](url));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const out = await readAs(res, as, url);
+      if (as === 'blob' && out.type.startsWith('text/') && out.size < 2000) throw new Error('respuesta inválida');
+      preferred = i;
+      return out;
+    } catch (e) { last = e; }
+  }
+  throw new Error(`No se pudo leer ${new URL(url).hostname} (${last?.message || 'sin respuesta'}). Puede que el sitio bloquee proxies: probá con tu propio proxy en Ajustes.`);
 }
 
 const IMG_ATTRS = ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-cfsrc', 'data-srcset', 'srcset', 'src'];

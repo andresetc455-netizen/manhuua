@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { getExtension, browse, seriesDetail } from '../sources/extensions.js';
-import { activeProxy } from '../sources/web.js';
+import { activeProxy, usingPublicProxy } from '../sources/web.js';
 import { enqueue, useDownloads } from '../downloads.js';
 import { useDb, getAll } from '../db.js';
 import { Icon, Cover, BgCover, Favicon, go } from '../ui.jsx';
 
-const NoProxy = () => !activeProxy() && (
-  <p className="hint">Sin proxy activo: si el sitio bloquea CORS no va a cargar. Iniciá <code>npm run serve</code> o configurá un proxy en <a href="#/settings">Ajustes</a>.</p>
+const NoProxy = () => !activeProxy() && !usingPublicProxy() && (
+  <p className="hint">Sin proxy: si el sitio bloquea CORS no va a cargar. Activá el proxy automático en <a href="#/settings">Ajustes</a>.</p>
 );
 
 export function ExtensionHome({ extId }) {

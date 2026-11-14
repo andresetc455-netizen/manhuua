@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { analyze, activeProxy } from '../sources/web.js';
+import { analyze, activeProxy, usingPublicProxy } from '../sources/web.js';
 import { enqueue, useDownloads, clearFinished, retry } from '../downloads.js';
 import { Icon } from '../ui.jsx';
 
@@ -47,7 +47,7 @@ export function UrlImporter() {
           placeholder="Pegá la URL de un capítulo o de la página de una serie (o varias URLs de capítulos, una por línea)" />
         <button className="btn primary" disabled={busy}><Icon n="down" size={16} /> {busy ? 'Analizando…' : 'Analizar'}</button>
       </form>
-      {!activeProxy() && <p className="hint">Sin proxy: la mayoría de los sitios bloquean la descarga directa desde el navegador (CORS). Iniciá <code>npm run serve</code> o configurá uno en Ajustes.</p>}
+      {!activeProxy() && !usingPublicProxy() && <p className="hint">Sin proxy: la mayoría de los sitios bloquean la descarga directa desde el navegador (CORS). Activá el proxy automático en Ajustes.</p>}
       {err && <p className="error">{err}</p>}
       {found && (
         <div className="found">
