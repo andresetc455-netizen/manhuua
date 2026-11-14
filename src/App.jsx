@@ -10,6 +10,7 @@ import Reader from './views/Reader.jsx';
 import Downloads from './views/Downloads.jsx';
 import Settings from './views/Settings.jsx';
 import { ExtensionHome, RemoteSeries } from './views/Extension.jsx';
+import { Updates, History, Browse, More } from './views/Feeds.jsx';
 
 function useRoute() {
   const [h, set] = useState(location.hash);
@@ -81,6 +82,9 @@ function Sidebar({ route, open, onClose, onAdd }) {
         <div className="brand"><img src="./icon.svg" alt="" width="28" height="28" /> Manhuua</div>
         <nav>
           {item('', <Icon n="book" />, 'Biblioteca', cur === '' || cur === 's')}
+          {item('updates', <Icon n="bell" />, 'Novedades', cur === 'updates')}
+          {item('history', <Icon n="clock" />, 'Historial', cur === 'history')}
+          {item('browse', <Icon n="compass" />, 'Explorar', cur === 'browse' || cur === 'ext')}
           {item('downloads', <Icon n="down" />, 'Descargas', cur === 'downloads', dl ? <b className="pill">{dl}</b> : null)}
           {item('settings', <Icon n="gear" />, 'Ajustes', cur === 'settings')}
         </nav>
@@ -108,6 +112,10 @@ export default function App() {
   let page;
   if (view === 's') page = <SeriesView key={a} id={a} />;
   else if (view === 'downloads') page = <Downloads />;
+  else if (view === 'updates') page = <Updates />;
+  else if (view === 'history') page = <History />;
+  else if (view === 'browse') page = <Browse onAdd={() => setAdding(true)} />;
+  else if (view === 'more') page = <More />;
   else if (view === 'settings') page = <Settings />;
   else if (view === 'ext' && b === 's') page = <RemoteSeries key={c} extId={a} url={c} />;
   else if (view === 'ext') page = <ExtensionHome key={a} extId={a} />;
@@ -120,6 +128,11 @@ export default function App() {
         <button className="icon-btn menu-btn" onClick={() => setMenu(true)} aria-label="Menú"><Icon n="menu" /></button>
         {page}
       </main>
+      <nav className="tabbar">
+        {[['', 'book', 'Biblioteca', ['', 's']], ['updates', 'bell', 'Novedades', ['updates']], ['history', 'clock', 'Historial', ['history']], ['browse', 'compass', 'Explorar', ['browse', 'ext']], ['more', 'dots', 'Más', ['more', 'downloads', 'settings']]].map(([h, i, l, m]) => (
+          <a key={h} href={'#/' + h} className={m.includes(view || '') ? 'on' : ''}><Icon n={i} size={22} /><span>{l}</span></a>
+        ))}
+      </nav>
       {adding && <AddExtension onClose={() => setAdding(false)} />}
     </div>
   );
