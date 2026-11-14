@@ -24,6 +24,10 @@ Igual que Seoulmate: cada `push` a `main` publica la app en `https://<usuario>.g
 
 GitHub Pages es solo estático: para descargar de otros sitios hace falta un proxy. Opción gratis: publicar `server/cloudflare-worker.js` en Cloudflare Workers y pegar `https://TU-WORKER.workers.dev/?url=` en **Ajustes → Red**. La traducción no necesita proxy.
 
+## Cloudflare Pages + Render
+
+Ver [DEPLOY.md](DEPLOY.md): frontend en Cloudflare Pages (`VITE_BACKEND_URL`) y backend con renderizador en Render (Docker).
+
 ## Uso local
 ```bash
 npm install

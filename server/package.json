@@ -1,0 +1,9 @@
+{
+  "name": "manhuua-backend",
+  "private": true,
+  "type": "module",
+  "description": "Proxy CORS + renderizador de Manhuua (Render u otro servidor Node)",
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "node proxy.mjs" },
+  "dependencies": { "playwright": "1.56.1" }
+}

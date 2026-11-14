@@ -1,0 +1,18 @@
+# Blueprint de Render: crea el backend (proxy + renderizador) desde el Dockerfile.
+services:
+  - type: web
+    name: manhuua-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free           # se duerme tras 15 min sin uso; "starter" queda siempre despierto
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ALLOWED_ORIGINS   # ej.: https://manhuua.pages.dev,https://*.manhuua.pages.dev
+        sync: false
+      - key: RATE_LIMIT_PROXY
+        value: "240"
+      - key: RATE_LIMIT_RENDER
+        value: "12"
+      - key: RENDER_CONCURRENCY
+        value: "1"

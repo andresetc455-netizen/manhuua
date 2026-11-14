@@ -3,10 +3,12 @@
 import { loadSettings } from '../settings.js';
 import { guessSeries, guessNumber, IMG_RE } from '../importers.js';
 import { loadDoc } from './engine.js';
+import { BACKEND, wakeBackend } from '../backend.js';
 
 let autoProxy = '';
 /** Detecta el proxy del servidor incluido (server/proxy.mjs) si la app se sirve desde él. */
 export async function detectProxy() {
+  if (BACKEND) { autoProxy = `${BACKEND}/proxy?url=`; wakeBackend(); return autoProxy; }
   try {
     const r = await fetch('./proxy?url=', { cache: 'no-store' });
     if (r.status === 400 && (await r.text()).includes('manhuua-proxy')) autoProxy = './proxy?url=';
@@ -43,6 +45,7 @@ export async function fetchVia(url, as = 'text', referer, trace) {
     try {
       const res = await fetch(target);
       rec.status = res.status;
+      if (!res.ok && res.headers.get('x-manhuua-error')) rec.backend = true; // error del backend, no del sitio
       if (res.redirected && via === 'directo') rec.finalUrl = res.url;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const out = as === 'blob' ? await res.blob() : await res.text();
@@ -51,12 +54,17 @@ export async function fetchVia(url, as = 'text', referer, trace) {
       return out;
     } catch (e) {
       rec.error = e.message === 'Failed to fetch' || e.name === 'TypeError' ? (via === 'directo' ? 'bloqueado (CORS o red)' : 'sin conexión') : e.message;
-      throw Object.assign(new Error(rec.error), { status: rec.status });
+      throw Object.assign(new Error(rec.error), { status: rec.status, backend: rec.backend });
     } finally { rec.ms = Math.round(performance.now() - t0); trace?.push(rec); }
   };
   if (activeProxy()) {
     try { return await attempt('proxy propio', proxied(url, referer)); }
-    catch (e) { throw new Error(`Proxy propio: ${e.message} en ${new URL(url).hostname}`); }
+    catch (e) {
+      // Con el backend configurado al compilar: si no responde, está ocupado o limitado, se sigue
+      // con los caminos de siempre (directo / proxies públicos). Un proxy elegido en Ajustes no cambia.
+      const fallback = BACKEND && !loadSettings().proxy?.trim() && (!e.status || (e.backend && [429, 502, 503, 504].includes(e.status)));
+      if (!fallback) throw new Error(`Proxy propio: ${e.message} en ${new URL(url).hostname}`);
+    }
   }
   let last;
   try { return await attempt('directo', url); } catch (e) {

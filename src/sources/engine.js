@@ -2,6 +2,7 @@
 // servidor de renderizado) y diagnóstico de por qué una página no muestra obras.
 import { loadSettings } from '../settings.js';
 import { fetchVia } from './web.js';
+import { BACKEND } from '../backend.js';
 
 /* ---------- renderizador (server/render.mjs vía server/proxy.mjs) ---------- */
 
@@ -10,6 +11,7 @@ let detectP = null;
 /** Detecta (una sola vez) el renderizador del servidor incluido, si la app se sirve desde él. */
 export function detectRender() {
   detectP ??= (async () => {
+    if (BACKEND) return (autoRender = `${BACKEND}/render`);
     try {
       const r = await fetch('./render', { cache: 'no-store' });
       if (r.status === 400 && (await r.text()).includes('manhuua-render')) autoRender = './render';

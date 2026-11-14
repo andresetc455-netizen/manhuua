@@ -3,6 +3,7 @@
 // Requiere:  npm i playwright  &&  npx playwright install chromium
 // No evade CAPTCHA ni protecciones antibots: si las detecta, lo informa y se detiene.
 import { createRequire } from 'node:module';
+import { assertPublicUrl } from './security.mjs';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 const ANTIBOT = /just a moment|attention required|captcha|verify you are human|checking your browser|ddos-guard/i;
@@ -16,17 +17,35 @@ async function loadPlaywright() {
   }
 }
 async function browser() {
-  if (!browserP) browserP = loadPlaywright().then((pw) => pw.chromium.launch()).catch((e) => { browserP = null; throw e; });
+  if (!browserP) {
+    browserP = loadPlaywright()
+      .then((pw) => pw.chromium.launch({ args: ['--disable-dev-shm-usage', '--disable-gpu', '--no-zygote'] }))
+      .then((b) => { b.on('disconnected', () => { browserP = null; }); return b; })
+      .catch((e) => { browserP = null; throw e; });
+  }
   return browserP;
 }
+/** ¿Está Playwright instalado? (no abre el navegador). */
+export async function renderAvailable() { try { await loadPlaywright(); return true; } catch { return false; } }
+export async function closeBrowser() { if (browserP) await (await browserP.catch(() => null))?.close().catch(() => {}); browserP = null; }
 
-export async function render(url, kind = 'catalog', { maxMs = 20000 } = {}) {
+const HEAVY = new Set(['image', 'media', 'font']);
+
+export async function render(url, kind = 'catalog', { maxMs = 20000, allowPrivate = true } = {}) {
   const b = await browser();
-  const ctx = await b.newContext({ userAgent: UA, locale: 'es-ES', viewport: { width: 1280, height: 1600 } });
+  const ctx = await b.newContext({ userAgent: UA, locale: 'es-ES', viewport: { width: 1280, height: 1600 }, serviceWorkers: 'block' });
+  // Solo hace falta el HTML: no descarga imágenes/video/fuentes (ahorra memoria y red) y, en
+  // producción, no deja que la página pida direcciones internas.
+  await ctx.route('**/*', async (route) => {
+    const req = route.request();
+    if (HEAVY.has(req.resourceType())) return route.abort();
+    if (!allowPrivate) { try { await assertPublicUrl(req.url()); } catch { return route.abort('blockedbyclient'); } }
+    return route.continue();
+  });
   const page = await ctx.newPage();
   const jsErrors = [];
   page.on('pageerror', (e) => jsErrors.push(e.message.slice(0, 200)));
-  page.on('console', (m) => m.type() === 'error' && jsErrors.push(m.text().slice(0, 200)));
+  page.on('console', (m) => m.type() === 'error' && !/^Failed to load resource/.test(m.text()) && jsErrors.push(m.text().slice(0, 200)));
   try {
     const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: maxMs });
     const status = resp?.status() ?? 0;
