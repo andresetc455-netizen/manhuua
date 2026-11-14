@@ -1,0 +1,126 @@
+import { useEffect, useState } from 'react';
+import { useSettings } from './settings.js';
+import { useExtensions, addExtension } from './sources/extensions.js';
+import { detectProxy } from './sources/web.js';
+import { useDownloads } from './downloads.js';
+import { Icon, Favicon, Sheet, go } from './ui.jsx';
+import Library from './views/Library.jsx';
+import SeriesView from './views/SeriesView.jsx';
+import Reader from './views/Reader.jsx';
+import Downloads from './views/Downloads.jsx';
+import Settings from './views/Settings.jsx';
+import { ExtensionHome, RemoteSeries } from './views/Extension.jsx';
+
+function useRoute() {
+  const [h, set] = useState(location.hash);
+  useEffect(() => {
+    const f = () => set(location.hash);
+    addEventListener('hashchange', f);
+    return () => removeEventListener('hashchange', f);
+  }, []);
+  return h.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
+}
+
+function useTheme(theme) {
+  useEffect(() => {
+    const mq = matchMedia('(prefers-color-scheme: dark)');
+    const apply = () => {
+      const t = theme === 'system' ? (mq.matches ? 'dark' : 'light') : theme;
+      document.documentElement.dataset.theme = t;
+      document.querySelector('meta[name=theme-color]')?.setAttribute('content', t === 'dark' ? '#121216' : '#f6f4f1');
+    };
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, [theme]);
+}
+
+function AddExtension({ onClose }) {
+  const [url, setUrl] = useState('');
+  const [name, setName] = useState('');
+  const [searchUrl, setSearchUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try { const x = await addExtension({ url, name, searchUrl }); onClose(); go(`/ext/${x.id}`); }
+    catch (err) { alert(err.message); setBusy(false); }
+  };
+  return (
+    <Sheet title="Agregar extensión" onClose={onClose}>
+      <form className="form" onSubmit={submit}>
+        <label>URL del sitio (portada o directorio de series)
+          <input required value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://ejemplo.com/series" inputMode="url" autoFocus />
+        </label>
+        <label>Nombre (opcional)
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Se detecta automáticamente" />
+        </label>
+        <label>URL de búsqueda (opcional, usá {'{q}'})
+          <input value={searchUrl} onChange={(e) => setSearchUrl(e.target.value)} placeholder="https://ejemplo.com/buscar?q={q}" inputMode="url" />
+        </label>
+        <p className="hint">También acepta un catálogo .json propio. Usalo solo con sitios cuyo contenido tengas derecho a descargar.</p>
+        <button className="btn primary" disabled={busy}>{busy ? 'Agregando…' : 'Agregar'}</button>
+      </form>
+    </Sheet>
+  );
+}
+
+function Sidebar({ route, open, onClose, onAdd }) {
+  const exts = useExtensions();
+  const dl = useDownloads().filter((j) => !['listo', 'error', 'omitido'].includes(j.status)).length;
+  const cur = route[0] || '';
+  const item = (hash, icon, label, active, extra) => (
+    <a href={'#/' + hash} className={'side-item' + (active ? ' active' : '')} onClick={onClose}>
+      {icon}<span>{label}</span>{extra}
+    </a>
+  );
+  return (
+    <>
+      <div className={'side-backdrop' + (open ? ' show' : '')} onClick={onClose} />
+      <aside className={'sidebar' + (open ? ' open' : '')}>
+        <div className="brand"><img src="./icon.svg" alt="" width="28" height="28" /> Manhuua</div>
+        <nav>
+          {item('', <Icon n="book" />, 'Biblioteca', cur === '' || cur === 's')}
+          {item('downloads', <Icon n="down" />, 'Descargas', cur === 'downloads', dl ? <b className="pill">{dl}</b> : null)}
+          {item('settings', <Icon n="gear" />, 'Ajustes', cur === 'settings')}
+        </nav>
+        <div className="side-sep">Extensiones</div>
+        <nav className="ext-list">
+          {exts.map((x) => item(`ext/${x.id}`, <Favicon ext={x} />, x.name, cur === 'ext' && route[1] === x.id))}
+          <button className="side-item add" onClick={() => { onClose(); onAdd(); }}><Icon n="plus" /><span>Agregar extensión</span></button>
+        </nav>
+      </aside>
+    </>
+  );
+}
+
+export default function App() {
+  const route = useRoute();
+  const [s] = useSettings();
+  const [menu, setMenu] = useState(false);
+  const [adding, setAdding] = useState(false);
+  useTheme(s.theme);
+  useEffect(() => { detectProxy(); }, []);
+
+  const [view, a, b, c] = route;
+  if (view === 'r') return <Reader key={a} chapterId={a} />;
+
+  let page;
+  if (view === 's') page = <SeriesView key={a} id={a} />;
+  else if (view === 'downloads') page = <Downloads />;
+  else if (view === 'settings') page = <Settings />;
+  else if (view === 'ext' && b === 's') page = <RemoteSeries key={c} extId={a} url={c} />;
+  else if (view === 'ext') page = <ExtensionHome key={a} extId={a} />;
+  else page = <Library />;
+
+  return (
+    <div className="shell">
+      <Sidebar route={route} open={menu} onClose={() => setMenu(false)} onAdd={() => setAdding(true)} />
+      <main className="main">
+        <button className="icon-btn menu-btn" onClick={() => setMenu(true)} aria-label="Menú"><Icon n="menu" /></button>
+        {page}
+      </main>
+      {adding && <AddExtension onClose={() => setAdding(false)} />}
+    </div>
+  );
+}

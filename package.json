@@ -1,0 +1,24 @@
+{
+  "name": "manhuua",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:single": "vite build --mode single",
+    "preview": "vite preview",
+    "serve": "npm run build && node server/proxy.mjs"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tesseract.js": "^6.0.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "vite": "^7.1.12",
+    "vite-plugin-singlefile": "^2.3.0"
+  }
+}
