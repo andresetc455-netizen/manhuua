@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSettings } from '../settings.js';
 import { activeProxy, detectProxy } from '../sources/web.js';
+import { renderBase } from '../sources/engine.js';
 import { useExtensions, removeExtension, updateExtension } from '../sources/extensions.js';
 import { Favicon, Icon } from '../ui.jsx';
 import { openDb } from '../db.js';
@@ -67,12 +68,23 @@ export default function Settings() {
         </div>
         <label className="opt">API key (se guarda solo en este dispositivo)<input type="password" value={s.genKey} onChange={(e) => set({ genKey: e.target.value })} autoComplete="off" /></label>
       </div>
+      <h3 className="sec">YouTube</h3>
+      <div className="card-box">
+        <p className="hint" style={{ margin: 0 }}>En el lector (PC) tocá el botón de YouTube para abrir el panel al costado y pegar un video o playlist.</p>
+        <label className="opt">ID de cliente de Google (opcional, para "Conectar mi cuenta" y ver tus playlists)
+          <input value={s.ytClientId} onChange={(e) => set({ ytClientId: e.target.value })} placeholder="1234-abc.apps.googleusercontent.com" />
+        </label>
+        <p className="hint" style={{ margin: 0 }}>Se crea gratis en Google Cloud Console → Credenciales → ID de cliente OAuth (aplicación web), con esta dirección como origen autorizado y la API "YouTube Data API v3" activada.</p>
+      </div>
       <h3 className="sec">Red</h3>
       <div className="card-box">
         <label className="opt">Proxy CORS (prefijo; se le agrega la URL codificada, o usá {'{url}'})
           <input value={s.proxy || ''} onChange={(e) => set({ proxy: e.target.value })} placeholder={auto || 'http://192.168.0.10:8787/proxy?url='} />
         </label>
         <label className="opt check"><input type="checkbox" checked={s.publicProxy !== false} onChange={(e) => set({ publicProxy: e.target.checked })} /> Usar proxy público automático si no hay uno propio (corsproxy.io / allorigins)</label>
+        <label className="opt">Renderizador de páginas dinámicas (opcional; se detecta solo con "npm run serve")
+          <input value={s.renderUrl || ''} onChange={(e) => set({ renderUrl: e.target.value })} placeholder={renderBase() || 'http://192.168.0.10:8787/render'} inputMode="url" />
+        </label>
         <p className="hint">Activo: {activeProxy() || (s.publicProxy !== false ? 'proxy público automático' : 'ninguno')}{auto ? ' (detectado automáticamente)' : ''}. El proxy público ve las URLs que pedís; para más privacidad y velocidad usá tu propio proxy (server/cloudflare-worker.js).</p>
       </div>
       <h3 className="sec">Extensiones</h3>

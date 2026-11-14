@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.4",
+    "happy-dom": "^15.11.7",
     "vite": "^7.1.12",
     "vite-plugin-singlefile": "^2.3.0",
     "vitest": "^3.2.4"

@@ -8,4 +8,5 @@ export default defineConfig(({ mode }) => ({
   plugins: [react(), ...(mode === 'single' ? [viteSingleFile()] : [])],
   define: { __SINGLE__: JSON.stringify(mode === 'single') },
   build: { outDir: mode === 'single' ? 'dist-single' : 'dist' },
+  test: { environmentOptions: { happyDOM: { settings: { disableJavaScriptFileLoading: true, disableJavaScriptEvaluation: true, disableCSSFileLoading: true } } } },
 }));

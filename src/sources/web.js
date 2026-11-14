@@ -2,6 +2,7 @@
 // Úsalo solo con contenido que tengas derecho a descargar.
 import { loadSettings } from '../settings.js';
 import { guessSeries, guessNumber, IMG_RE } from '../importers.js';
+import { loadDoc } from './engine.js';
 
 let autoProxy = '';
 /** Detecta el proxy del servidor incluido (server/proxy.mjs) si la app se sirve desde él. */
@@ -30,33 +31,45 @@ const PUBLIC = [
 let preferred = 0;
 export const usingPublicProxy = () => !activeProxy() && loadSettings().publicProxy !== false;
 
-async function readAs(res, as, url) {
-  if (!res.ok) throw new Error(`HTTP ${res.status} en ${new URL(url).hostname}`);
-  return as === 'blob' ? res.blob() : res.text();
-}
 
-export async function fetchVia(url, as = 'text', referer) {
+/**
+ * Descarga una URL como texto o Blob. Si se pasa `trace` (array), registra cada intento
+ * {via, ok, status, error, ms, bytes, finalUrl} para el diagnóstico.
+ */
+export async function fetchVia(url, as = 'text', referer, trace) {
+  const attempt = async (via, target) => {
+    const t0 = performance.now();
+    const rec = { via, ok: false };
+    try {
+      const res = await fetch(target);
+      rec.status = res.status;
+      if (res.redirected && via === 'directo') rec.finalUrl = res.url;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const out = as === 'blob' ? await res.blob() : await res.text();
+      if (as === 'blob' && out.type.startsWith('text/') && out.size < 2000) throw new Error('respuesta inválida (no es imagen)');
+      rec.ok = true; rec.bytes = out.size ?? out.length;
+      return out;
+    } catch (e) {
+      rec.error = e.message === 'Failed to fetch' || e.name === 'TypeError' ? (via === 'directo' ? 'bloqueado (CORS o red)' : 'sin conexión') : e.message;
+      throw Object.assign(new Error(rec.error), { status: rec.status });
+    } finally { rec.ms = Math.round(performance.now() - t0); trace?.push(rec); }
+  };
   if (activeProxy()) {
-    let res;
-    try { res = await fetch(proxied(url, referer)); } catch { throw new Error('No se pudo conectar con el proxy configurado'); }
-    return readAs(res, as, url);
+    try { return await attempt('proxy propio', proxied(url, referer)); }
+    catch (e) { throw new Error(`Proxy propio: ${e.message} en ${new URL(url).hostname}`); }
   }
-  // 1) directo (funciona si el sitio permite CORS)
-  try { return await readAs(await fetch(url), as, url); } catch (e) { if (!usingPublicProxy()) throw new Error('Bloqueado por CORS: activá el proxy automático o configurá uno en Ajustes'); }
-  // 2) proxies públicos, empezando por el último que funcionó
   let last;
+  try { return await attempt('directo', url); } catch (e) {
+    last = e;
+    if (e.status) throw new Error(`HTTP ${e.status} en ${new URL(url).hostname}`); // el sitio respondió: un proxy no cambia el resultado
+    if (!usingPublicProxy()) throw new Error('Bloqueado por CORS: activá el proxy automático o configurá uno en Ajustes');
+  }
   for (let k = 0; k < PUBLIC.length; k++) {
     const i = (preferred + k) % PUBLIC.length;
-    try {
-      const res = await fetch(PUBLIC[i](url));
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const out = await readAs(res, as, url);
-      if (as === 'blob' && out.type.startsWith('text/') && out.size < 2000) throw new Error('respuesta inválida');
-      preferred = i;
-      return out;
-    } catch (e) { last = e; }
+    try { const out = await attempt(`proxy público ${new URL(PUBLIC[i]('x')).hostname}`, PUBLIC[i](url)); preferred = i; return out; }
+    catch (e) { last = e; }
   }
-  throw new Error(`No se pudo leer ${new URL(url).hostname} (${last?.message || 'sin respuesta'}). Puede que el sitio bloquee proxies: probá con tu propio proxy en Ajustes.`);
+  throw new Error(`No se pudo leer ${new URL(url).hostname} (${last?.message || 'sin respuesta'}).`);
 }
 
 const IMG_ATTRS = ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-cfsrc', 'data-srcset', 'srcset', 'src'];
@@ -126,5 +139,6 @@ export async function analyze(url) {
   if (!/^https?:\/\//i.test(url)) throw new Error('La URL debe empezar con http:// o https://');
   // URL directa a una imagen
   if (IMG_RE.test(new URL(url).pathname)) return { url, title: 'Imagen', series: 'Descargas', number: null, images: [url], chapters: [], kind: 'chapter' };
-  return extract(await fetchVia(url), url);
+  const { html, base } = await loadDoc(url, { kind: 'chapter', min: 1, count: (h, u) => { const i = extract(h, u); return i.images.length >= 3 ? i.images.length : i.chapters.length; } });
+  return { ...extract(html, base), url };
 }

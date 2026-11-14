@@ -35,6 +35,17 @@ El proxy (`server/proxy.mjs`) es necesario porque los navegadores bloquean leer 
 
 Otros comandos: `npm run dev` (desarrollo), `npm run build` (PWA estática en `dist/`), `npm run build:single` (un único HTML).
 
+## Extensiones: cómo se cargan los catálogos
+Orden de estrategias (`src/sources/engine.js`, `extensions.js`, `jsonwalk.js`):
+1. **HTML estático**: tarjetas imagen + enlace (soporta `data-src`, `srcset`, `<picture>`, fondos CSS, enlace fuera de la imagen) y paginación (`rel=next`, "Siguiente", `?page=N`, `/page/N`).
+2. **Datos embebidos**: `__NEXT_DATA__` (Next.js), `__NUXT_DATA__` (Nuxt 3), JSON-LD y estados iniciales.
+3. **Renderizado** (solo con `npm run serve` y Playwright instalado: `npm i playwright && npx playwright install chromium`): abre la página en Chromium y espera a que haya contenido y el DOM quede estable (no tiempos fijos). Detecta páginas antibots/CAPTCHA y se detiene: no las evade.
+4. **API JSON**: si la URL devuelve JSON, se usa como extensión de API; `{page}` y `{q}` en la URL habilitan paginación y búsqueda.
+
+Cada extensión muestra un **diagnóstico**: intentos de conexión, errores HTTP, estrategia usada, obras/portadas/enlaces, errores de JavaScript y la causa cuando no hay resultados.
+
+En GitHub Pages no hay renderizador: las páginas SPA se pueden leer solo si traen datos embebidos o una API pública.
+
 ## Notas técnicas
 - React 19 + Vite, sin backend obligatorio. Datos en IndexedDB (`src/db.js`), ajustes y extensiones en localStorage.
 - El extractor es genérico (`src/sources/web.js`, `src/sources/extensions.js`): detecta imágenes lazy (`data-src`, `srcset`…), descarta logos/íconos e imágenes chicas, y enlaces "Capítulo N". Sitios que arman la página 100 % con JavaScript (SPA) pueden no exponer las imágenes en el HTML; en ese caso conviene un catálogo JSON o una fuente nueva implementando `browse/seriesDetail`.

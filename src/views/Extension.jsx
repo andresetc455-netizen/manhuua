@@ -9,6 +9,38 @@ const NoProxy = () => !activeProxy() && !usingPublicProxy() && (
   <p className="hint">Sin proxy: si el sitio bloquea CORS no va a cargar. Activá el proxy automático en <a href="#/settings">Ajustes</a>.</p>
 );
 
+/** Panel de diagnóstico de una carga de extensión. */
+export function DiagPanel({ ext, diag, open, onToggle }) {
+  if (!diag) return null;
+  const ok = diag.attempts?.some((a) => a.ok) || diag.render?.html || diag.via === 'catalogo JSON';
+  const rows = [
+    ['Extensión', `${ext.name} (${{ web: 'web', api: 'API JSON', catalog: 'catálogo JSON' }[ext.type] || ext.type})`],
+    ['URL', diag.url],
+    diag.finalUrl && diag.finalUrl !== diag.url && ['Redirigida a', diag.finalUrl],
+    ['Conexión', ok ? 'OK' : 'Falló'],
+    diag.attempts?.length && ['Intentos', diag.attempts.map((a) => `${a.via}: ${a.ok ? `OK ${a.status} · ${Math.round((a.bytes || 0) / 1024)} KB` : a.error}${a.ms != null ? ` · ${a.ms} ms` : ''}`).join('\n')],
+    ['Carga de la página', diag.via ? `${diag.via}${diag.render?.wait ? ` · ${diag.render.wait.reason} (${diag.render.wait.ms} ms)` : ''}` : diag.renderError || '—'],
+    diag.bytes != null && ['HTML', `${Math.round(diag.bytes / 1024)} KB · ${diag.textChars} caracteres de texto · ${diag.scripts} scripts${diag.spaRoot ? ` · contenedor SPA ${diag.spaRoot}` : ''}`],
+    diag.embedded?.length && ['Datos embebidos', diag.embedded.join(', ')],
+    diag.strategy && ['Método de extracción', diag.strategy],
+    ['Obras detectadas', diag.count ?? 0],
+    diag.covers != null && ['Portadas detectadas', diag.covers],
+    diag.links != null && ['Enlaces / imágenes en la página', `${(diag.rendered || diag).links} / ${(diag.rendered || diag).imgs}`],
+    diag.staticCount != null && diag.renderCount != null && ['Estático vs renderizado', `${diag.staticCount} → ${diag.renderCount}`],
+    diag.attempts?.some((a) => a.status >= 400) && ['Errores HTTP', diag.attempts.filter((a) => a.status >= 400).map((a) => `${a.via}: ${a.status}`).join(', ')],
+    ['Errores JavaScript', diag.render ? (diag.render.jsErrors.length ? diag.render.jsErrors.slice(0, 5).join('\n') : 'ninguno') : 'no se ejecutó JavaScript (sin renderizador)'],
+    diag.renderError && ['Error del renderizador', diag.renderError],
+    diag.antibot && ['Protección antibots', 'detectada (no se evade)'],
+  ].filter(Boolean);
+  return (
+    <div className={'diag' + (diag.count ? '' : ' bad')}>
+      {diag.reasons?.length > 0 && <ul className="diag-reasons">{diag.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>}
+      <button className="btn sm" onClick={onToggle}>{open ? 'Ocultar diagnóstico' : 'Ver diagnóstico'}</button>
+      {open && <dl className="diag-table">{rows.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{String(v)}</dd></div>)}</dl>}
+    </div>
+  );
+}
+
 export function ExtensionHome({ extId }) {
   const ext = getExtension(extId);
   const [items, setItems] = useState([]);
@@ -16,6 +48,9 @@ export function ExtensionHome({ extId }) {
   const [q, setQ] = useState('');
   const [state, setState] = useState('loading');
   const [err, setErr] = useState('');
+  const [diag, setDiag] = useState(null);
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [page, setPage] = useState(1);
 
   const load = async (opts = {}, append = false) => {
     setState('loading'); setErr('');
@@ -23,6 +58,8 @@ export function ExtensionHome({ extId }) {
       const r = await browse(ext, opts);
       setItems((prev) => (append ? [...prev, ...r.items.filter((i) => !prev.some((p) => p.url === i.url))] : r.items));
       setNext(r.next);
+      setPage(r.nextPage ? r.nextPage - 1 : 1);
+      setDiag(r.diag);
       setState('ok');
     } catch (e) { setErr(e.message); setState('error'); }
   };
@@ -44,7 +81,7 @@ export function ExtensionHome({ extId }) {
       </form>
       <NoProxy />
       {state === 'error' && <p className="error">{err}</p>}
-      {state === 'ok' && !items.length && <p className="muted">No se detectaron series en esta página. Probá con la URL del directorio o listado del sitio.</p>}
+      {state !== 'loading' && <DiagPanel ext={ext} diag={diag} open={diagOpen} onToggle={() => setDiagOpen(!diagOpen)} />}
       <div className="grid">
         {items.map((it) => (
           <a key={it.url} className="card" href={`#/ext/${ext.id}/s/${encodeURIComponent(it.url)}`} onClick={() => sessionStorage.setItem('mh.pick', JSON.stringify(it))}>
@@ -54,7 +91,7 @@ export function ExtensionHome({ extId }) {
         ))}
       </div>
       {state === 'loading' && <p className="muted center">Cargando…</p>}
-      {next && state === 'ok' && <button className="btn wide" onClick={() => load({ url: next }, true)}>Cargar más</button>}
+      {next && state === 'ok' && <button className="btn wide" onClick={() => load({ url: next, page: page + 1, query: q || undefined }, true)}>Cargar más</button>}
     </div>
   );
 }
@@ -107,7 +144,7 @@ export function RemoteSeries({ extId, url }) {
             </div>
           </div>
           <h3 className="sec">Capítulos</h3>
-          {!d.chapters.length && <p className="muted">No se detectaron enlaces a capítulos en esta página.</p>}
+          {!d.chapters.length && <DiagPanel ext={ext} diag={d.diag} open={false} onToggle={() => {}} />}
           <ul className="chapters">
             {[...d.chapters].reverse().map((c) => {
               const have = lib?.urls.has(c.url), q = queued.has(c.url);

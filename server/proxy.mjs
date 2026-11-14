@@ -3,6 +3,7 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { render } from './render.mjs';
 
 const PORT = +process.env.PORT || 8787;
 const DIST = path.resolve(import.meta.dirname, '../dist');
@@ -27,6 +28,14 @@ async function proxy(u, res) {
   }
 }
 
+async function renderRoute(u, res) {
+  const target = u.searchParams.get('url') || '';
+  const json = (code, body) => { res.writeHead(code, { ...CORS, 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); };
+  if (!/^https?:\/\//i.test(target)) { res.writeHead(400, CORS); return res.end('manhuua-render: parámetro url inválido'); }
+  try { json(200, await render(target, u.searchParams.get('kind') || 'catalog')); }
+  catch (e) { json(e.code === 501 ? 501 : 502, { error: e.message }); }
+}
+
 async function serveStatic(u, res) {
   let file = path.join(DIST, decodeURIComponent(u.pathname));
   if (!file.startsWith(DIST)) { res.writeHead(403); return res.end(); }
@@ -43,5 +52,6 @@ http.createServer((req, res) => {
   const u = new URL(req.url, 'http://localhost');
   if (req.method === 'OPTIONS') { res.writeHead(204, { ...CORS, 'access-control-allow-headers': '*' }); return res.end(); }
   if (u.pathname.endsWith('/proxy')) return proxy(u, res);
+  if (u.pathname.endsWith('/render')) return renderRoute(u, res);
   return serveStatic(u, res);
 }).listen(PORT, '0.0.0.0', () => console.log(`Manhuua en http://localhost:${PORT}  (proxy en /proxy?url=)`));

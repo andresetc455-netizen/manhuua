@@ -216,6 +216,7 @@ export default function Reader({ chapterId }) {
           onContextMenu={(e) => { e.preventDefault(); if (confirm('¿Rehacer la traducción de este capítulo?')) clearTranslations(st.chapter.id).then(() => { setTr({}); setTrOn(false); setTimeout(() => setTrOn(true)); }); }}>
           <Icon n="translate" />
         </button>
+        <button className={'icon-btn desk-only' + (s.ytOpen ? ' accent' : '')} title="Panel de YouTube" onClick={() => setS({ ytOpen: !s.ytOpen })}><Icon n="yt" /></button>
         <button className="icon-btn" title={s.mode === 'vertical' ? 'Modo paginado' : 'Modo vertical'} onClick={() => setS({ mode: s.mode === 'vertical' ? 'paged' : 'vertical' })}>
           <Icon n={s.mode === 'vertical' ? 'pages' : 'scroll'} />
         </button>

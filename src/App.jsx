@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSettings } from './settings.js';
 import { useExtensions, addExtension } from './sources/extensions.js';
 import { detectProxy } from './sources/web.js';
+import { detectRender } from './sources/engine.js';
 import { useDownloads } from './downloads.js';
 import { Icon, Favicon, Sheet, go } from './ui.jsx';
 import Library from './views/Library.jsx';
@@ -11,6 +12,7 @@ import Downloads from './views/Downloads.jsx';
 import Settings from './views/Settings.jsx';
 import { ExtensionHome, RemoteSeries } from './views/Extension.jsx';
 import { Updates, History, Browse, More } from './views/Feeds.jsx';
+import YouTubePanel from './views/YouTube.jsx';
 
 function useRoute() {
   const [h, set] = useState(location.hash);
@@ -104,10 +106,10 @@ export default function App() {
   const [menu, setMenu] = useState(false);
   const [adding, setAdding] = useState(false);
   useTheme(s.theme);
-  useEffect(() => { detectProxy(); }, []);
+  useEffect(() => { detectProxy(); detectRender(); }, []);
 
   const [view, a, b, c] = route;
-  if (view === 'r') return <Reader key={a} chapterId={a} />;
+  if (view === 'r') return <div className={'reader-wrap' + (s.ytOpen ? ' with-yt' : '')}><Reader key={a} chapterId={a} /><YouTubePanel /></div>;
 
   let page;
   if (view === 's') page = <SeriesView key={a} id={a} />;
