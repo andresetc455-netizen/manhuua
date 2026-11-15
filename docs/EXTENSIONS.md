@@ -202,6 +202,17 @@ El diagnóstico de cada extensión muestra:
 
 En **Explorar**, la búsqueda consulta todas las extensiones activas en paralelo. Cada fuente tiene su propio tiempo máximo y una que falle no corta las demás.
 
+- **Simultaneidad:** hasta 8 fuentes a la vez. Con más, las demás esperan turno. El tope protege al backend, que atiende 16 pedidos a la vez.
+- **Resultados progresivos:** cada fuente aparece apenas responde, con su estado (obras, error, sin respuesta).
+- **Paginación independiente:** cada fuente con más resultados muestra **más** en su etiqueta, y **Más de todas** avanza las que tengan página siguiente.
+  - Las obras repetidas de una misma fuente no se agregan dos veces.
+  - Si la página siguiente falla, se conservan las obras ya cargadas y se informa el error.
+  - Si una página no trae nada nuevo, la fuente deja de ofrecer **más**.
+- **Cancelación:** una búsqueda nueva cancela la anterior y las páginas pendientes.
+- **Caché:** cada página correcta se guarda 5 minutos en memoria (como máximo 120). Los errores no se guardan. El botón de recarga vacía esta caché. MangaDex mantiene además su propia caché (2 minutos en el backend).
+- **Filtros:** tipo (manga, manhwa, manhua o novela, según lo que informe la fuente), idioma, género, estado, autor y fuente.
+- **Orden:** el de cada fuente, alfabético o por última actualización. El orden por popularidad solo existe donde la API lo ofrece: en MangaDex se elige en sus opciones ("más seguidos"), y la fuente devuelve el catálogo ya ordenado.
+
 Los resultados se agrupan por obra:
 
 - **Se agrupan solos** si coincide un ID externo (`ids`), o si coincide un título o título alternativo normalizado y no hay conflicto de autor ni de año.
@@ -212,6 +223,20 @@ Los resultados se agrupan por obra:
 
   El usuario decide con **Es la misma obra** o **Son distintas**, y en la ficha puede **Separar** una fuente.
 - **Las correcciones se guardan** en el navegador (`manhuua.merges`).
+
+## Novelas propias (TXT / EPUB)
+
+Ninguna plataforma de novelas ofrece lectura autorizada para terceros (ver [FUENTES.md](FUENTES.md)). Por eso el lector de texto funciona con **archivos del usuario**: en **Biblioteca → Importar** se aceptan `.txt` y `.epub` sin DRM.
+
+- **TXT:** se separa en capítulos por las líneas del tipo "Capítulo N", "Chapter N", "Prólogo" o "Epílogo". Si no hay ninguna, queda un solo capítulo.
+- **EPUB:**
+  - Se leen el título, el autor y el orden de lectura (*spine*). Se saltan las páginas sin texto, como la portada.
+  - Un EPUB con recursos cifrados (DRM) se rechaza; solo se acepta la ofuscación de tipografías.
+- **Seguridad:** se guarda solo el texto, por párrafos. Nunca se guarda ni se muestra HTML del archivo, así que sus scripts o enlaces no se ejecutan.
+- **Lector:**
+  - Opciones: tamaño de letra, tipografía (con serifa, sin serifa o monoespaciada), tema (oscuro, claro o sepia), ancho de lectura e interlineado.
+  - Guarda la posición por párrafo, tiene índice de capítulos y botones anterior/siguiente.
+  - Funciona en Historial y "Seguí donde lo dejaste". Todo queda en el dispositivo, sin conexión.
 
 ## Ejemplo mínimo
 

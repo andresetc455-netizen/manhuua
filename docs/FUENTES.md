@@ -38,19 +38,28 @@ Estados posibles:
 
 ### Tabla
 
-| # | Plataforma | API | Metadatos | Capítulos | Lectura | Estado |
+Clasificación:
+1. Integrable con lectura autorizada.
+2. Integrable solo para metadatos.
+3. No integrable: restricciones legales, técnicas o DRM, o falta de acceso autorizado.
+4. Pendiente de verificar.
+
+| Plataforma | API | Metadatos | Capítulos | Lectura | Clasificación | Estado |
 |---|---|---|---|---|---|---|
-| 1 | MangaDex | Oficial y documentada | Sí | Sí, por idioma y grupo | Sí (MangaDex@Home por el backend) | **Integrada, verificación real pendiente** |
-| 22 | MangaUpdates | Oficial (`api.mangaupdates.com/v1`): en línea, formato JSON confirmado | Sí | No (solo lanzamientos de grupos) | No (no aloja contenido) | **Pendiente de verificación**: términos de uso sin confirmar y búsqueda por POST (requiere una ruta propia en el backend) |
-| 15 | WEBTOON | No pública. RSS por serie sin confirmar | RSS | Lista de episodios por RSS | No (imágenes con protección de Referer) | **Pendiente de verificación**, solo metadatos |
-| 26 | Royal Road | No pública. RSS por obra sin confirmar | RSS | Lista por RSS | Sin confirmar en los términos | **Pendiente de verificación**, solo metadatos |
-| 27 | Scribble Hub | No pública. RSS sin confirmar | RSS | Lista por RSS | Sin confirmar | **Pendiente de verificación**, solo metadatos |
-| 23 | Novel Updates | No | HTML (Cloudflare) | Enlaces a terceros | No | **No integrable actualmente**: bloquea la automatización |
-| 6 | MANGA Plus | Interna (protobuf), no para terceros | — | — | No | **No integrable**: términos, región, imágenes cifradas. Sus capítulos aparecen en MangaDex como externos y se informan. |
-| 16–21 | Tapas, Tappytoon, Lezhin, Pocket Comics, Toomics, Manta | No pública | — | — | No | **No integrables**: pago, DRM o cuenta |
-| 24–25 | WuxiaWorld, Webnovel | No pública | — | — | No | **No integrables**: comerciales, de pago |
-| 2–5, 8–11, 13–14 | NovelCool, ManhwaWeb, LeerCapítulo, OlympusXYZ, MangaPark, MangaKakalot, MangaBuddy, Bato.to, WeebCentral, MangaReader | No | HTML | HTML | — | **No integrables** como fuentes predefinidas: scans sin licencia. OlympusXYZ además responde 403 a servidores. El usuario puede agregarlas por su cuenta. |
-| 7, 12 | MangaSee, ComicK | — | — | — | — | **No integrables**: cerradas en 2025 |
+| MangaDex | Oficial y documentada | Sí | Sí, por idioma y grupo | Sí (MangaDex@Home por el backend) | 1 | **Integrada, verificación real pendiente** (probada solo contra un servidor simulado) |
+| Novelas propias (TXT/EPUB sin DRM) | No aplica (archivos del usuario) | Título y autor del EPUB | Sí | Sí, lector de texto | 1 | **Integrada y verificada localmente** (sin red) |
+| MangaUpdates | Oficial (`api.mangaupdates.com/v1`). En línea; formato JSON confirmado en `/v1/genres` | Sí | No (solo lanzamientos de grupos) | No (no aloja contenido) | 4 (candidata a 2) | **Pendiente de verificación**: términos de uso sin confirmar; la búsqueda es por POST y requiere una ruta propia en el backend |
+| WEBTOON | No pública. RSS por serie sin confirmar | RSS | Lista por RSS | No (imágenes con protección de Referer) | 4 (candidata a 2) | **Pendiente de verificación** |
+| Royal Road | No pública. RSS por obra sin confirmar | RSS | Lista por RSS | Sin confirmar en los términos | 4 (candidata a 2) | **Pendiente de verificación** |
+| Scribble Hub | No pública. RSS sin confirmar | RSS | Lista por RSS | Sin confirmar | 4 (candidata a 2) | **Pendiente de verificación** |
+| Novel Updates | No | HTML detrás de Cloudflare | Enlaces a terceros | No | 3 | **No integrable actualmente**: bloquea la automatización |
+| MANGA Plus | Interna (protobuf), no para terceros | — | — | No | 3 | **No integrable**: términos, región, imágenes cifradas. Sus capítulos aparecen en MangaDex como externos y se informan. |
+| Tapas, Tappytoon, Lezhin, Pocket Comics, Toomics, Manta | No pública | — | — | No | 3 | **No integrables**: pago, DRM o cuenta |
+| WuxiaWorld, Webnovel | No pública | — | — | No | 3 | **No integrables**: comerciales y de pago |
+| NovelCool, ManhwaWeb, LeerCapítulo, OlympusXYZ, MangaPark, MangaKakalot, MangaBuddy, Bato.to, WeebCentral, MangaReader | No | HTML | HTML | — | 3 | **No integrables** como fuentes predefinidas: scans sin licencia. OlympusXYZ además responde 403 a servidores. El usuario puede agregarlas por su cuenta. |
+| MangaSee, ComicK | — | — | — | — | 3 | **No integrables**: cerradas en 2025 |
+
+No se agregó ninguna API ni endpoint que no esté documentado. Las plataformas de clasificación 4 no se integraron, ni siquiera como "solo metadatos", porque no se pudieron confirmar su formato real ni sus términos.
 
 ### Qué haría falta para pasar de "pendiente" a "solo metadatos"
 
@@ -59,4 +68,4 @@ Estados posibles:
 
 ### Modo texto (novelas)
 
-Ninguna fuente de novelas pudo integrarse con lectura autorizada. Por eso no se agregó un lector de texto que hoy no tendría contenido real que mostrar. Queda como trabajo futuro si aparece una API autorizada, por ejemplo una que el usuario controle.
+Ninguna plataforma de novelas pudo integrarse con lectura autorizada. Por eso el lector de texto funciona con las novelas propias del usuario en TXT o EPUB sin DRM. No muestra capítulos de ninguna plataforma ni simula que existan; el detalle está en [EXTENSIONS.md](EXTENSIONS.md#novelas-propias-txt--epub). Si aparece una fuente autorizada, puede usar el mismo lector.

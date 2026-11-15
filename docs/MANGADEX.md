@@ -70,6 +70,12 @@ El proxy general (`/proxy`) no se modificó ni se debilitó.
   - Las páginas se guardan como `md:page/{capítulo}/{calidad}/{archivo}`. La URL de MangaDex@Home caduca y la resuelve el backend en cada pedido.
 - **Descargas y lectura sin conexión:** iguales a las del resto de las fuentes.
 
+## En el catálogo global
+
+- MangaDex aparece en **Explorar** junto con las demás fuentes y pagina por su cuenta, de a 24 obras, con **más**. El total se muestra en la etiqueta de la fuente.
+- La última página posible respeta `offset + limit ≤ 10000`.
+- El catálogo guarda cada página 5 minutos en el navegador; el backend agrega su propia caché de 2 minutos.
+
 ## Opciones (Más → Extensiones → MangaDex)
 
 - **Idioma de lectura:** por defecto `es-la` y `es`. También se puede elegir por obra en la ficha.
