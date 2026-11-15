@@ -31,15 +31,25 @@ function StrictPageImg({ src, i, referer, hosts, eager, className, onLoad, onErr
   const [url, setUrl] = useState(null);
   const [why, setWhy] = useState('');
   const [tries, setTries] = useState(0);
+  const [h, setH] = useState(0); // alto conservado al liberar la página (el scroll no salta)
   useEffect(() => { if (eager) setWant(true); }, [eager]);
+  // Capítulos largos: una página ya cargada que queda lejos (más de ~4 pantallas) se libera (Object URL
+  // y Blob) y vuelve a pedirse al acercarse (caché del navegador). La memoria no crece con la sesión.
+  useEffect(() => {
+    if (!url || !ref.current) return;
+    const el = ref.current;
+    const io = new IntersectionObserver((es) => { if (es.every((e) => !e.isIntersecting) && el.offsetHeight) { setH(el.offsetHeight); setWant(false); } }, { rootMargin: '400% 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [url]);
   useEffect(() => {
     if (want || !ref.current) return;
     const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) setWant(true); }, { rootMargin: '150% 0px' });
     io.observe(ref.current);
     return () => io.disconnect();
-  }, [want, src]);
+  }, [want, src, url]); // url: al liberar la página se observa el nuevo marcador (no la imagen anterior)
   useEffect(() => {
-    if (!want) return;
+    if (!want) { setUrl(null); return; }
     let alive = true, obj = null;
     setUrl(null); setWhy('');
     pageBlob(src, referer, hosts, { force: tries > 0 }).then(
@@ -49,8 +59,8 @@ function StrictPageImg({ src, i, referer, hosts, eager, className, onLoad, onErr
     return () => { alive = false; if (obj) URL.revokeObjectURL(obj); }; // el Object URL se libera al cambiar o salir
   }, [want, src, tries]); // eslint-disable-line
   if (why) return <PageErr i={i} why={why} onRetry={() => { setWhy(''); setTries((t) => t + 1); }} />;
-  if (!url) return <div ref={ref} className={(className || 'pg') + ' pg-wait'} data-i={i} aria-label={`Cargando página ${i + 1}`} />;
-  return <img className={className} src={url} alt={`Página ${i + 1}`} decoding="async" onLoad={onLoad} onError={() => { setWhy('La imagen recibida está dañada o no es una imagen.'); onError?.(); }} />;
+  if (!url) return <div ref={ref} className={(className || 'pg') + ' pg-wait'} style={h ? { height: h, minHeight: 0 } : undefined} data-i={i} aria-label={`Cargando página ${i + 1}`} />;
+  return <img ref={ref} className={className} src={url} alt={`Página ${i + 1}`} decoding="async" onLoad={onLoad} onError={() => { setWhy('La imagen recibida está dañada o no es una imagen.'); onError?.(); }} />;
 }
 
 /** Página del lector: extensiones JSON en línea → modo estricto; el resto, como siempre. */
