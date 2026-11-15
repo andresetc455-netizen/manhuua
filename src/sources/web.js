@@ -46,24 +46,35 @@ export const usingPublicProxy = () => !activeProxy() && loadSettings().publicPro
  * Descarga una URL como texto o Blob. Si se pasa `trace` (array), registra cada intento
  * {via, ok, status, error, ms, bytes, finalUrl} para el diagnóstico.
  */
+/** Error de política con el diagnóstico completo: URL original, destino, motivo y qué declarar. */
+export function blockedError(from, to, reason = 'host') {
+  let h = ''; try { h = new URL(to).host; } catch {}
+  const why = reason === 'downgrade' ? 'baja de HTTPS a HTTP' : reason === 'unverified' ? 'destino no verificable sin el proxy propio' : 'dominio no declarado por la extensión';
+  const hint = reason === 'host' && h ? ` Si es un dominio legítimo de la fuente (por ejemplo su CDN), agregá "${h}" a "hosts" en el manifiesto.` : reason === 'downgrade' ? ' La fuente tiene que servir la imagen por HTTPS.' : '';
+  return Object.assign(new Error(`Redirección bloqueada: ${from}${h ? ` → ${h}` : ''} (${why}).${hint}`), { source: 'policy', policy: true, from, to, toHost: h, reason, suggest: reason === 'host' ? h : undefined });
+}
+
 export async function fetchVia(url, as = 'text', referer, trace, { hosts } = {}) {
   // Con "hosts" (extensiones JSON) la petición y sus redirecciones solo pueden ir a esos dominios:
   // el proxy propio lo hace cumplir en cada salto e informa la URL final; en acceso directo no se
   // siguen redirecciones (el navegador no deja ver a dónde van); los proxies públicos no se usan.
   const strict = hosts?.length > 0;
-  if (strict && !hostInPolicy(url, hosts)) throw Object.assign(new Error(`Dominio no autorizado por la extensión (${new URL(url).host})`), { status: 403, source: 'policy', policy: true });
+  if (strict && !hostInPolicy(url, hosts)) throw Object.assign(new Error(`Dominio no autorizado por la extensión (${new URL(url).host}): ${url}. Si es legítimo, agregá "${new URL(url).host}" a "hosts" en el manifiesto.`), { status: 403, source: 'policy', policy: true, from: url, to: url, toHost: new URL(url).host, reason: 'host', suggest: new URL(url).host });
   const attempt = async (via, target) => {
     const t0 = performance.now();
     const rec = { via, ok: false };
     try {
       const res = await fetch(target, strict && via === 'directo' ? { redirect: 'manual' } : undefined);
-      if (strict && res.type === 'opaqueredirect') { rec.source = 'policy'; throw new Error('la fuente respondió con una redirección; sin el proxy propio no se puede verificar su destino'); }
+      if (strict && res.type === 'opaqueredirect') { rec.source = 'policy'; throw blockedError(url, '', 'unverified'); }
       if (strict && via !== 'directo') {
+        const blocked = res.headers.get('x-manhuua-blocked-url');
+        if (blocked) { rec.source = 'policy'; throw blockedError(url, blocked, res.headers.get('x-manhuua-blocked-reason') === 'downgrade' ? 'downgrade' : 'host'); }
         const fin = res.headers.get('x-final-url');
-        if (!fin && res.ok) { rec.source = 'policy'; throw new Error('el proxy configurado no informa el destino final de las redirecciones'); }
-        if (fin && !hostInPolicy(fin, hosts)) { rec.source = 'policy'; throw new Error(`redirección a un dominio no autorizado (${new URL(fin).host})`); }
+        if (!fin && res.ok) { rec.source = 'policy'; throw Object.assign(new Error('El proxy configurado no informa el destino final de las redirecciones (x-final-url): no se puede verificar el dominio.'), { source: 'policy', policy: true, from: url, reason: 'unverified' }); }
+        if (fin && !hostInPolicy(fin, hosts)) { rec.source = 'policy'; throw blockedError(url, fin); }
+        if (fin && /^https:/i.test(url) && /^http:/i.test(fin)) { rec.source = 'policy'; throw blockedError(url, fin, 'downgrade'); }
       }
-      if (strict && via === 'directo' && res.url && !hostInPolicy(res.url, hosts)) { rec.source = 'policy'; throw new Error(`redirección a un dominio no autorizado (${new URL(res.url).host})`); }
+      if (strict && via === 'directo' && res.url && !hostInPolicy(res.url, hosts)) { rec.source = 'policy'; throw blockedError(url, res.url); }
       rec.status = res.status;
       if (!res.ok) {
         // ¿Quién respondió con error? El backend marca sus propios errores; el resto es del sitio.
@@ -84,6 +95,7 @@ export async function fetchVia(url, as = 'text', referer, trace, { hosts } = {})
       return out;
     } catch (e) {
       rec.error = e.message === 'Failed to fetch' || e.name === 'TypeError' ? (via === 'directo' ? 'bloqueado (CORS o red)' : 'sin conexión') : e.message;
+      if (e.policy) { rec.source = 'policy'; throw e; } // conserva el diagnóstico (origen, destino, motivo)
       if (!rec.source) rec.source = rec.status ? 'site' : 'network';
       throw Object.assign(new Error(rec.error), { status: rec.status, source: rec.source, challenge: rec.challenge, backend: rec.source === 'backend' });
     } finally { rec.ms = Math.round(performance.now() - t0); trace?.push(rec); }
@@ -94,6 +106,7 @@ export async function fetchVia(url, as = 'text', referer, trace, { hosts } = {})
       // Con el backend configurado al compilar: si no responde, está ocupado o limitado, se sigue
       // con los caminos de siempre (directo / proxies públicos). Un proxy elegido en Ajustes no cambia.
       const fallback = e.source !== 'policy' && BACKEND && !loadSettings().proxy?.trim() && (!e.status || (e.backend && [429, 502, 503, 504].includes(e.status)));
+      if (e.policy) throw e;
       if (!fallback) throw Object.assign(new Error(`Proxy propio: ${e.message} en ${new URL(url).hostname}`), { status: e.status, source: e.source, challenge: e.challenge });
     }
   }
@@ -101,7 +114,7 @@ export async function fetchVia(url, as = 'text', referer, trace, { hosts } = {})
   try { return await attempt('directo', url); } catch (e) {
     last = e;
     if (e.status) throw Object.assign(new Error(`HTTP ${e.status} en ${new URL(url).hostname}`), { status: e.status, source: 'site' }); // el sitio respondió: un proxy no cambia el resultado
-    if (e.source === 'policy') throw Object.assign(new Error(e.message), { source: 'policy', policy: true });
+    if (e.source === 'policy') throw e.policy ? e : Object.assign(new Error(e.message), { source: 'policy', policy: true });
     if (!usingPublicProxy() || strict) throw new Error(strict ? 'Bloqueado por CORS: las extensiones JSON necesitan acceso directo o el proxy propio (no se usan proxies públicos)' : 'Bloqueado por CORS: activá el proxy automático o configurá uno en Ajustes');
   }
   for (let k = 0; k < PUBLIC.length; k++) {

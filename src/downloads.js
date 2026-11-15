@@ -5,7 +5,7 @@ import { ensureSeries, saveChapter, updateSeries } from './library.js';
 import { setCover, autoCover, needsCover } from './covers.js';
 import { loadSettings } from './settings.js';
 import { get, byIndex, getAll } from './db.js';
-import { getExtension, seriesDetail, chapterImages, chapterHosts, isEnabled } from './sources/extensions.js';
+import { getExtension, seriesDetail, chapterImages, chapterHosts, extHosts, isEnabled } from './sources/extensions.js';
 import { followSeries, seriesSources } from './online.js';
 
 const jobs = [];
@@ -59,7 +59,8 @@ async function process(job) {
   const httpRef = (u) => (/^https?:/.test(u || '') ? u : undefined);
   if (job.cover && needsCover(series)) {
     try {
-      await setCover(series.id, await fetchVia(job.cover, 'blob', httpRef(job.sourceUrl) || httpRef(job.url)), { provider: 'site', url: job.cover, link: job.sourceUrl });
+      // Extensiones JSON: misma política de dominios que las páginas (una portada ajena no se guarda).
+      await setCover(series.id, await fetchVia(job.cover, 'blob', httpRef(job.sourceUrl) || httpRef(job.url), undefined, { hosts: chapterHosts(job.url, job.extId) ?? extHosts(getExtension(job.extId)) }), { provider: 'site', url: job.cover, link: job.sourceUrl });
       series.cover = true;
     } catch {}
   }

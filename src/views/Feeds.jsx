@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useDb, getAll } from '../db.js';
 import { checkAllUpdates } from '../downloads.js';
-import { useExtensions, isEnabled } from '../sources/extensions.js';
+import { useExtensions, isEnabled, extHosts } from '../sources/extensions.js';
 import { searchAll } from '../sources/multi.js';
 import { groupWorks, onMergesChange, getMerges } from '../unify.js';
 import { stateOf } from './Extensions.jsx';
@@ -181,7 +181,7 @@ export function Browse({ onAdd }) {
           <div className="grid">
             {shown.map((w) => (
               <a key={w.key} className="card" href={`#/w/${encodeURIComponent(w.key)}`} onClick={(e) => { e.preventDefault(); openWork(w); }}>
-                <Cover src={w.cover} title={w.title} referer={w.sources[0].ext.url}>
+                <Cover src={w.cover} title={w.title} referer={(w.coverExt || w.sources[0].ext).url} hosts={extHosts(w.coverExt || w.sources[0].ext)}>
                   {w.sources.length > 1 && <span className="kind src-count">{w.sources.length} fuentes</span>}
                 </Cover>
                 <span className="card-title">{w.title}</span>

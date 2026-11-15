@@ -1,7 +1,7 @@
 // Ficha unificada: una obra con todas sus fuentes. Los capítulos se muestran por fuente (selector)
 // y nunca se mezclan entre fuentes.
 import { useEffect, useState } from 'react';
-import { getExtension, seriesDetail, isEnabled } from '../sources/extensions.js';
+import { getExtension, seriesDetail, isEnabled, extHosts } from '../sources/extensions.js';
 import { classify } from '../sources/engine.js';
 import { enqueue, useDownloads } from '../downloads.js';
 import { useDb, getAll, byIndex } from '../db.js';
@@ -57,6 +57,8 @@ export default function WorkView({ workKey }) {
   if (!work) return <div className="page"><p className="empty">Esta ficha ya no está en memoria. Buscala de nuevo en <a href="#/browse">Explorar</a> o abrila desde la <a href="#/">Biblioteca</a>.</p></div>;
 
   const okd = srcs.map((s) => det[s.key]?.d).filter(Boolean);
+  // Portada: se recuerda de qué fuente vino para aplicarle sus dominios autorizados.
+  const [coverUrl, coverExt] = [...srcs.map((s) => [det[s.key]?.d?.cover, s.ext]), [work.cover, work.coverExt || srcs[0]?.ext]].find(([v]) => v) || [];
   const pick = (f) => [...okd.map((d) => d[f]), work[f]].find((v) => v != null && v !== '' && !(Array.isArray(v) && !v.length));
   const desc = [work.description, ...okd.map((d) => d.description)].filter(Boolean).sort((a, b) => b.length - a.length)[0];
   const genres = [...new Set([...(work.genres || []), ...okd.flatMap((d) => d.genres || [])])];
@@ -113,8 +115,8 @@ export default function WorkView({ workKey }) {
       </header>
       {err && <p className="error">{err}</p>}
       <div className="hero">
-        <BgCover src={pick('cover')} referer={srcs[0]?.ext.url} />
-        <Cover src={pick('cover')} title={work.title} referer={srcs[0]?.ext.url} />
+        <BgCover src={coverUrl} referer={coverExt?.url} hosts={extHosts(coverExt)} />
+        <Cover src={coverUrl} title={work.title} referer={coverExt?.url} hosts={extHosts(coverExt)} />
         <div>
           <h1>{work.title}</h1>
           {work.altTitles?.length > 0 && <p className="muted small alt-titles">También: {work.altTitles.slice(0, 4).join(' · ')}</p>}

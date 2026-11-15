@@ -4,7 +4,7 @@ import { get, getAll, byIndex, write } from './db.js';
 import { uid } from './library.js';
 import { analyze, fetchVia } from './sources/web.js';
 import { setCover, needsCover } from './covers.js';
-import { chapterImages, getExtension, identityOf, removedInfo } from './sources/extensions.js';
+import { chapterImages, getExtension, identityOf, removedInfo, extHosts } from './sources/extensions.js';
 
 // Clave de capítulo: URL sin barra final (se conserva el #fragmento: los catálogos JSON lo usan).
 export const normUrl = (u = '') => u.replace(/\/+(?=#|$)/, '');
@@ -32,7 +32,10 @@ export async function followSeries(ext, sourceUrl, detail, { seriesId } = {}) {
     : { id: uid(), title: (detail.title || 'Sin título').trim(), favorite: false, addedAt: Date.now(), source: 'local', online: true, ...meta };
   const srcEntry = { extId: ext.id, extName: ext.name, url: sourceUrl, chapterCount: detail.chapters?.length ?? 0, state: 'ok', lastCheck: Date.now() };
   // Una fuente por URL: si había una entrada de una extensión ya eliminada con la misma URL, se reemplaza.
-  const sources = [...seriesSources(base).filter((x) => !(x.url === sourceUrl && (x.extId === ext.id || !getExtension(x.extId)))), srcEntry];
+  // Se reemplaza la entrada de esta misma fuente, o la de una extensión eliminada con la MISMA identidad
+  // (id + dominio). Una homónima de otro dominio no absorbe la fuente eliminada.
+  const same = (x) => x.extId === ext.id || (!getExtension(x.extId) && removedInfo(x.extId)?.identity === identityOf(ext));
+  const sources = [...seriesSources(base).filter((x) => !(x.url === sourceUrl && same(x))), srcEntry];
   const alts = [...new Set([...(base.altTitles || []), ...(detail.altTitles || []), ...(detail.title && detail.title !== base.title ? [detail.title] : [])])].slice(0, 30);
   const series = { ...base, sources, altTitles: alts, ids: { ...(detail.ids || {}), ...(base.ids || {}) }, activeSource: base.activeSource || ext.id };
   const existing = prev ? await byIndex('chapters', 'seriesId', prev.id) : [];
@@ -54,7 +57,8 @@ export async function followSeries(ext, sourceUrl, detail, { seriesId } = {}) {
   });
   await write(['series', 'chapters'], (o) => { o.series.put(series); put.forEach((c) => o.chapters.put(c)); });
   if (detail.cover && needsCover(series)) {
-    fetchVia(detail.cover, 'blob', /^https?:/.test(sourceUrl) ? sourceUrl : undefined)
+    // Extensiones JSON: la portada solo puede venir (y redirigir) a sus dominios; si no, no se guarda.
+    fetchVia(detail.cover, 'blob', /^https?:/.test(sourceUrl) ? sourceUrl : undefined, undefined, { hosts: extHosts(ext) })
       .then((b) => setCover(series.id, b, { provider: 'site', url: detail.cover, link: sourceUrl }))
       .catch(() => {});
   }
@@ -129,31 +133,31 @@ export function equivalent(ch, list, s, target) {
  * nombre ni por dominio. Además une entradas de fuente duplicadas (misma URL). No borra datos.
  * Devuelve {series, chapters, progress} actualizados.
  */
-export async function relinkSources(installed) {
+export async function relinkSources(installed, { confirmed = {} } = {}) {
   const byIdentity = new Map(installed.map((x) => [identityOf(x), x.id]));
-  const byManifest = new Map(installed.filter((x) => x.manifest?.id).map((x) => [x.manifest.id, x.id]));
   const live = new Set(installed.map((x) => x.id));
-  const target = (oldId, url) => {
+  // Automático solo con evidencia de identidad (lápida con el mismo id + dominio). Datos antiguos sin
+  // lápida: solo si el usuario lo autorizó (confirmed: {idViejo: idNuevo}, ver legacyCandidates).
+  const target = (oldId) => {
     if (!oldId || live.has(oldId) || oldId === 'local') return null;
+    if (confirmed[oldId] && live.has(confirmed[oldId])) return confirmed[oldId];
     const gone = removedInfo(oldId);
     if (gone?.identity && byIdentity.has(gone.identity)) return byIdentity.get(gone.identity);
-    const mf = /^mf:([^/]+)\//.exec(url || '');
-    if (mf && byManifest.has(mf[1]) && (!gone || gone.manifestId === mf[1])) return byManifest.get(mf[1]);
     return null;
   };
   const stats = { series: 0, chapters: 0, progress: 0 };
   for (const s of await getAll('series')) {
     const map = new Map();
-    for (const x of seriesSources(s)) { const t = target(x.extId, x.url); if (t) map.set(x.extId, t); }
-    const t0 = target(s.extId, s.sourceUrl); if (t0) map.set(s.extId, t0);
+    for (const x of seriesSources(s)) { const t = target(x.extId); if (t) map.set(x.extId, t); }
+    const t0 = target(s.extId); if (t0) map.set(s.extId, t0);
     const srcs = seriesSources(s).map((x) => (map.has(x.extId) ? { ...x, extId: map.get(x.extId), extName: getExtension(map.get(x.extId))?.name || x.extName } : x));
     const dedup = [];
-    for (const x of srcs) { const i = dedup.findIndex((y) => y.url === x.url && (y.extId === x.extId || !live.has(y.extId) || !live.has(x.extId))); if (i < 0) dedup.push(x); else dedup[i] = live.has(x.extId) ? { ...dedup[i], ...x } : { ...x, ...dedup[i] }; }
+    for (const x of srcs) { const i = dedup.findIndex((y) => y.url === x.url && y.extId === x.extId); if (i < 0) dedup.push(x); else dedup[i] = { ...dedup[i], ...x }; }
     const changedSeries = map.size || dedup.length !== seriesSources(s).length;
     // Capítulos y progreso: se reasigna solo el id viejo → nuevo de la MISMA extensión, en la misma transacción.
     const chMap = new Map(map);
     const chs = await byIndex('chapters', 'seriesId', s.id);
-    for (const c of chs) if (c.sourceId && !chMap.has(c.sourceId)) { const t = target(c.sourceId, c.url); if (t) chMap.set(c.sourceId, t); }
+    for (const c of chs) if (c.sourceId && !chMap.has(c.sourceId)) { const t = target(c.sourceId); if (t) chMap.set(c.sourceId, t); }
     if (!changedSeries && !chMap.size) continue;
     await write(['series', 'chapters', 'progress'], (o) => {
       o.series.get(s.id).onsuccess = (e) => {
@@ -175,6 +179,25 @@ export async function relinkSources(installed) {
     });
   }
   return stats;
+}
+
+/**
+ * Fuentes eliminadas de una obra sin evidencia de identidad (datos de versiones anteriores) para las
+ * que hay una extensión instalada con el mismo id de manifiesto. No se reasocian solas: la ficha
+ * ofrece hacerlo y el usuario confirma (puede ser otra fuente del mismo id en otro dominio).
+ */
+export function legacyCandidates(series, chapters, installed) {
+  const live = new Set(installed.map((x) => x.id));
+  const out = [];
+  const ids = new Set([...seriesSources(series).map((x) => x.extId), ...chapters.map((c) => c.sourceId)].filter((k) => k && k !== 'local' && !live.has(k)));
+  for (const old of ids) {
+    const gone = removedInfo(old);
+    if (gone?.identity && installed.some((x) => identityOf(x) === gone.identity)) continue; // se reasocia sola
+    const mid = chapters.find((c) => c.sourceId === old && /^mf:/.test(c.url || ''))?.url.slice(3).split('/')[0] || gone?.manifestId;
+    const cands = installed.filter((x) => mid && x.manifest?.id === mid);
+    if (cands.length) out.push({ oldId: old, oldName: gone?.name || seriesSources(series).find((x) => x.extId === old)?.extName, oldDomain: gone?.domain, candidates: cands });
+  }
+  return out;
 }
 
 /** URLs de las imágenes de un capítulo en línea (las pide a la página de origen si hace falta). */

@@ -96,7 +96,7 @@ describe('servidor real: redirecciones y política de dominios', () => {
     proc.stdout.on('data', (d) => /backend en/.test(String(d)) && res());
   });
   afterAll(() => { srv?.close(); proc?.kill(); });
-  const get = async (q) => { const r = await fetch(`http://127.0.0.1:${pport}/proxy?${new URLSearchParams(q)}`); return { status: r.status, body: await r.text(), final: r.headers.get('x-final-url') }; };
+  const get = async (q) => { const r = await fetch(`http://127.0.0.1:${pport}/proxy?${new URLSearchParams(q)}`); return { status: r.status, body: await r.text(), final: r.headers.get('x-final-url'), blocked: r.headers.get('x-manhuua-blocked-url'), why: r.headers.get('x-manhuua-blocked-reason') }; };
 
   it('modo producción: destinos internos y redirecciones hacia ellos se bloquean', async () => {
     await start(); await startProxy({ NODE_ENV: 'production' });
@@ -109,6 +109,7 @@ describe('servidor real: redirecciones y política de dominios', () => {
     expect((await get({ url: `http://127.0.0.1:${port}/ok` })).status).toBe(200);
     const ext = await get({ url: `http://127.0.0.1:${port}/a-externo`, hosts: `127.0.0.1:${port}` });
     expect(ext.status).toBe(403); expect(ext.body).toMatch(/Redirección a un dominio no autorizado por la extensión \(otro\.ejemplo/);
+    expect(ext.blocked).toBe(`http://otro.ejemplo:${port}/x`); expect(ext.why).toBe('host'); // diagnóstico para el frontend
     expect((await get({ url: `http://127.0.0.1:${port}/ok`, hosts: 'api.ejemplo.com' })).status).toBe(403);
     expect((await get({ url: `http://127.0.0.1:${port}/ok`, hosts: 'com' })).status).toBe(403); // la lista solo restringe
     expect((await get({ url: `http://127.0.0.1:${port}/ok`, hosts: '*' })).status).toBe(400);

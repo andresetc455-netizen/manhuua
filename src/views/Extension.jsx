@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getExtension, browse, seriesDetail, isEnabled, recordStatus } from '../sources/extensions.js';
+import { getExtension, browse, seriesDetail, isEnabled, recordStatus, extHosts } from '../sources/extensions.js';
 import { activeProxy, usingPublicProxy } from '../sources/web.js';
 import { classify, ERROR_KINDS } from '../sources/engine.js';
 import { enqueue, useDownloads } from '../downloads.js';
@@ -100,7 +100,7 @@ export function ExtensionHome({ extId }) {
       <div className="grid">
         {items.map((it) => (
           <a key={it.url} className="card" href={`#/ext/${ext.id}/s/${encodeURIComponent(it.url)}`} onClick={() => sessionStorage.setItem('mh.pick', JSON.stringify(it))}>
-            <Cover src={it.cover} title={it.title} referer={ext.url}>{it.status && <span className="kind">{it.status}</span>}</Cover>
+            <Cover src={it.cover} title={it.title} referer={ext.url} hosts={extHosts(ext)}>{it.status && <span className="kind">{it.status}</span>}</Cover>
             <span className="card-title">{it.title}</span>
             {it.author && <span className="muted small card-sub">{it.author}</span>}
           </a>
@@ -178,8 +178,8 @@ export function RemoteSeries({ extId, url }) {
       {d && (
         <>
           <div className="hero">
-            <BgCover src={d.cover} referer={ext.url} />
-            <Cover src={d.cover} title={d.title} referer={ext.url} />
+            <BgCover src={d.cover} referer={ext.url} hosts={extHosts(ext)} />
+            <Cover src={d.cover} title={d.title} referer={ext.url} hosts={extHosts(ext)} />
             <div>
               <h1>{d.title}</h1>
               <div className="meta-row muted">

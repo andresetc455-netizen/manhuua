@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useDb, get, byIndex, write } from '../db.js';
-import { sourceKey, seriesSources, equivalent, followSeries, migrateSources } from '../online.js';
+import { sourceKey, seriesSources, equivalent, followSeries, migrateSources, legacyCandidates, relinkSources } from '../online.js';
 import { useExtensions, getExtension, seriesDetail, isEnabled } from '../sources/extensions.js';
 import { searchAll } from '../sources/multi.js';
 import { compareWorks } from '../unify.js';
@@ -40,6 +40,13 @@ export default function SeriesView({ id }) {
     const x = getExtension(k); return x ? stateOf(x).label : 'extensión eliminada · se conservan los capítulos';
   };
   const pickSource = (k) => { setSrcSel(k); updateSeries(id, { activeSource: k }); };
+  // Fuentes eliminadas de versiones anteriores (sin evidencia de identidad): solo se reasocian si el usuario confirma.
+  const legacy = legacyCandidates(s, allChapters, exts);
+  const relink = async (k, x) => {
+    if (!confirm(`¿Asociar los capítulos, descargas y progreso de "${srcName(k)}" a "${x.name}" (${new URL(x.manifest.baseUrl).host})?\n\nHacelo solo si es la misma fuente: sus pedidos irán a ese dominio.`)) return;
+    const r = await relinkSources(exts, { confirmed: { [k]: x.id } });
+    setMsg(r.chapters || r.series ? `Fuente reasociada con ${x.name}.` : 'No había nada para reasociar.');
+  };
 
   const pmap = new Map(progress.map((p) => [p.chapterId, p]));
   let next = chapters.length ? nextToRead(chapters, progress, s.lastChapterId) : null;
@@ -130,6 +137,7 @@ export default function SeriesView({ id }) {
                 <b>{srcName(k)}</b><span className="muted small">{count(k)} capítulos{srcState(k) ? ` · ${srcState(k)}` : ''}</span>
               </button>
               {k !== 'local' && keys.length > 1 && linked.has(k) && <button className="btn sm" onClick={() => detach(k)}>Quitar</button>}
+              {legacy.find((l) => l.oldId === k)?.candidates.map((x) => <button key={x.id} className="btn sm" onClick={() => relink(k, x)}>Reasociar con {x.name}</button>)}
             </li>
           ))}
         </ul>

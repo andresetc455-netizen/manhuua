@@ -7,12 +7,62 @@ import { Icon } from '../ui.jsx';
 import { activeProxy, proxied, fetchVia } from '../sources/web.js';
 import { sourceKey, seriesSources, equivalent } from '../online.js';
 import { getExtension } from '../sources/extensions.js';
+import { pageBlob } from '../imgload.js';
+
+function PageErr({ i, why, onRetry }) {
+  return (
+    <div className="pg-err" data-i={i} onClick={(e) => e.stopPropagation()}>
+      <b>No se pudo cargar la página {i + 1}</b>
+      <span className="muted small">{why}</span>
+      <button className="btn sm" onClick={onRetry}>Reintentar</button>
+    </div>
+  );
+}
 
 /**
- * Una página del lector. En capítulos en línea intenta primero la imagen directa (sin gastar el
- * backend); si falla, la pide por el proxy. Si tampoco carga, muestra un error con "Reintentar".
+ * Página de una extensión JSON (con dominios autorizados): nunca se pone la URL remota en un <img>,
+ * porque el navegador seguiría redirecciones a cualquier dominio. Se pide con fetchVia estricto
+ * (proxy propio con "hosts" desde el primer intento; sin backend, acceso directo sin seguir
+ * redirecciones) y se muestra como Blob. Carga diferida: se pide al acercarse a la pantalla.
  */
-function PageImg({ src, i, online, referer, hosts, eager, className, onLoad, onError }) {
+function StrictPageImg({ src, i, referer, hosts, eager, className, onLoad, onError }) {
+  const ref = useRef(null);
+  const [want, setWant] = useState(!!eager);
+  const [url, setUrl] = useState(null);
+  const [why, setWhy] = useState('');
+  const [tries, setTries] = useState(0);
+  useEffect(() => { if (eager) setWant(true); }, [eager]);
+  useEffect(() => {
+    if (want || !ref.current) return;
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) setWant(true); }, { rootMargin: '150% 0px' });
+    io.observe(ref.current);
+    return () => io.disconnect();
+  }, [want, src]);
+  useEffect(() => {
+    if (!want) return;
+    let alive = true, obj = null;
+    setUrl(null); setWhy('');
+    pageBlob(src, referer, hosts, { force: tries > 0 }).then(
+      (b) => { if (!alive) return; obj = URL.createObjectURL(b); setUrl(obj); },
+      (e) => { if (!alive) return; setWhy(e.message); onError?.(); },
+    );
+    return () => { alive = false; if (obj) URL.revokeObjectURL(obj); }; // el Object URL se libera al cambiar o salir
+  }, [want, src, tries]); // eslint-disable-line
+  if (why) return <PageErr i={i} why={why} onRetry={() => { setWhy(''); setTries((t) => t + 1); }} />;
+  if (!url) return <div ref={ref} className={(className || 'pg') + ' pg-wait'} data-i={i} aria-label={`Cargando página ${i + 1}`} />;
+  return <img className={className} src={url} alt={`Página ${i + 1}`} decoding="async" onLoad={onLoad} onError={() => { setWhy('La imagen recibida está dañada o no es una imagen.'); onError?.(); }} />;
+}
+
+/** Página del lector: extensiones JSON en línea → modo estricto; el resto, como siempre. */
+function PageImg(props) {
+  return props.online && props.hosts?.length ? <StrictPageImg {...props} /> : <PlainPageImg {...props} />;
+}
+
+/**
+ * Página de un capítulo descargado o de una extensión HTML. En línea intenta primero la imagen
+ * directa (sin gastar el backend); si falla, la pide por el proxy. Si no carga, "Reintentar".
+ */
+function PlainPageImg({ src, i, online, referer, hosts, eager, className, onLoad, onError }) {
   const [url, setUrl] = useState(src);
   const [stage, setStage] = useState(0); // 0 directa · 1 proxy · 2 error
   const [why, setWhy] = useState('');
@@ -117,6 +167,9 @@ function Vertical({ urls, start, gap, maxWidth, onPage, onTap, footer, jumpRef, 
 
 function Paged({ urls, cur, setCur, dir, fit, onTap, onEnd, tr, online, referer, hosts }) {
   const touch = useRef(null);
+  const strict = online && hosts?.length > 0;
+  // Siguiente página precargada por el mismo camino verificado (no con <link preload>, que seguiría redirecciones).
+  useEffect(() => { if (strict && urls[cur + 1]) pageBlob(urls[cur + 1], referer, hosts).catch(() => {}); }, [strict, cur, urls]); // eslint-disable-line
   const go = useCallback((d) => {
     const n = cur + d;
     if (n < 0) return;
@@ -147,7 +200,7 @@ function Paged({ urls, cur, setCur, dir, fit, onTap, onEnd, tr, online, referer,
         <PageImg src={urls[cur]} i={cur} online={online} referer={referer} hosts={hosts} eager />
         {tr?.[cur]?.items && <TrOverlay data={tr[cur]} />}
       </div>
-      {urls[cur + 1] && <link rel="preload" as="image" href={urls[cur + 1]} />}
+      {urls[cur + 1] && !strict && <link rel="preload" as="image" href={urls[cur + 1]} />}
     </div>
   );
 }
@@ -216,8 +269,10 @@ export default function Reader({ chapterId }) {
         }
         if (i < 0) break;
         setTrMsg(`Traduciendo ${k + 1}/${n}…`);
-        // Páginas en línea: el OCR necesita leer la imagen, así que se pide por el proxy si hay uno.
-        const src = st.online && activeProxy() ? proxied(st.urls[i], st.referer, st.hosts) : st.urls[i];
+        // Páginas en línea: el OCR necesita leer la imagen. Extensiones JSON: mismo camino verificado
+        // que el lector; HTML: fetchVia de siempre (una sola vez por el proxy, sin anidarlo).
+        const u = st.urls[i];
+        const src = !st.online ? u : st.hosts?.length ? () => pageBlob(u, st.referer, st.hosts) : () => fetchVia(u, 'blob', st.referer);
         try { done[i] = await translatePage(st.chapter.id, i, src); }
         catch (e) { done[i] = { error: e.message }; if (/límite|limit|quota|fetch/i.test(e.message)) { setTrMsg('Error: ' + e.message); alive && setTr({ ...done }); return; } }
         if (alive) setTr({ ...done });

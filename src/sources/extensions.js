@@ -17,28 +17,43 @@ function save(l) { list = l; try { localStorage.setItem(KEY, JSON.stringify(l));
 export const getExtension = (id) => list.find((e) => e.id === id);
 
 // ---- Identidad estable ----
-// Una extensión se identifica por su manifiesto (id del JSON) o, si es un sitio/API, por su URL
-// exacta (no por nombre ni dominio). Al eliminarla se recuerda su id local; si se reinstala la
-// misma identidad, recupera ese id y la biblioteca (obras, capítulos, progreso) vuelve a apuntarle.
+// Una extensión JSON se identifica por el id de su manifiesto MÁS el dominio normalizado de su
+// baseUrl: el mismo id publicado desde otro dominio es otra fuente. Un sitio/API se identifica por su
+// URL exacta (nunca por el nombre). Al eliminarla se recuerda su id local; si se reinstala la misma
+// identidad, recupera ese id y la biblioteca (obras, capítulos, progreso) vuelve a apuntarle.
 const GONE = 'manhuua.extensions.removed';
 const loadGone = () => { try { return JSON.parse(localStorage.getItem(GONE)) || {}; } catch { return {}; } };
 const saveGone = (g) => { try { const e = Object.entries(g).sort((a, b) => b[1].at - a[1].at).slice(0, 300); localStorage.setItem(GONE, JSON.stringify(Object.fromEntries(e))); } catch {} };
+/** Dominio normalizado de una URL: host en minúsculas (con puerto si no es el estándar), sin punto final. */
+export function normDomain(url) {
+  try { const u = new URL(url); return u.hostname.toLowerCase().replace(/\.$/, '') + (u.port ? ':' + u.port : ''); } catch { return ''; }
+}
+const manifestIdentity = (m) => `manifest:${m.id}@${normDomain(m.baseUrl)}`;
 export function identityOf(x) {
-  if (x.manifest?.id) return `manifest:${x.manifest.id}`;
+  if (x.manifest?.id) return manifestIdentity(x.manifest);
   try { const u = new URL(x.url); return `${x.type}:${u.protocol}//${u.host.toLowerCase()}${u.pathname.replace(/\/+$/, '')}${u.search}`; } catch { return `${x.type}:${x.url}`; }
 }
 /** Ids locales que tuvo una identidad (eliminadas antes), para recuperar la asociación. */
 export const formerIds = (identity) => Object.entries(loadGone()).filter(([, v]) => v.identity === identity).map(([id]) => id);
 export const removedInfo = (id) => loadGone()[id];
-function stableId(identity, preferred) {
+function stableId(identity, ...preferred) {
   const old = formerIds(identity).find((id) => !getExtension(id));
   if (old) return old;
-  if (preferred && !getExtension(preferred) && !(loadGone()[preferred] && loadGone()[preferred].identity !== identity)) return preferred;
-  return Math.random().toString(36).slice(2, 9);
+  const free = (id) => id && !getExtension(id) && !(loadGone()[id] && loadGone()[id].identity !== identity);
+  return preferred.find(free) || Math.random().toString(36).slice(2, 9);
 }
 export const isEnabled = (x) => x.enabled !== false;
-/** Extensión dueña de una URL interna "mf:<id-del-manifiesto>/..." (sirve aunque se haya reinstalado). */
-export const extensionForUrl = (url = '', fallbackId) => getExtension(fallbackId) || (/^mf:/.test(url) ? list.find((e) => e.manifest?.id === url.slice(3).split('/')[0]) : undefined);
+/**
+ * Extensión dueña de una URL interna "mf:<id-del-manifiesto>/...". Si se conoce la fuente del capítulo
+ * (extId) manda solo esa: nunca se reasigna a otra extensión con el mismo id de manifiesto (podría ser
+ * de otro dominio). Sin extId, solo si hay una única candidata.
+ */
+export const extensionForUrl = (url = '', fallbackId) => {
+  if (fallbackId) return getExtension(fallbackId);
+  if (!/^mf:/.test(url)) return undefined;
+  const c = list.filter((e) => e.manifest?.id === url.slice(3).split('/')[0]);
+  return c.length === 1 ? c[0] : undefined;
+};
 export function useExtensions() {
   const [l, set] = useState(list);
   useEffect(() => (subs.add(set), () => subs.delete(set)), []);
@@ -55,36 +70,74 @@ async function detectType(url) {
   } catch { return { type: 'web' }; }
 }
 
-/** Instala (o actualiza, si ya existe con el mismo id) una extensión JSON a partir de su manifiesto. */
-export function installManifest(manifest, manifestUrl) {
+/**
+ * Cambios sensibles entre dos manifiestos: dominio o URL base, referer y dominios autorizados nuevos.
+ * Ninguno se aplica sin confirmación explícita (no se reemplazan en silencio).
+ */
+export function sensitiveChanges(a, b) {
+  const out = [];
+  const da = normDomain(a.baseUrl), db = normDomain(b.baseUrl);
+  if (da !== db) out.push({ field: 'dominio', from: da, to: db });
+  else if (String(a.baseUrl).replace(/\/+$/, '') !== String(b.baseUrl).replace(/\/+$/, '')) out.push({ field: 'baseUrl', from: a.baseUrl, to: b.baseUrl });
+  if ((a.referer || '') !== (b.referer || '')) out.push({ field: 'referer', from: a.referer || '(ninguno)', to: b.referer || '(ninguno)' });
+  const ha = new Set(hostPolicy(a)), added = hostPolicy(b).filter((h) => !ha.has(h) && h !== db);
+  if (added.length) out.push({ field: 'hosts', from: '', to: added.join(', ') });
+  return out;
+}
+export const describeChanges = (ch) => ch.map((c) => c.field === 'hosts' ? `• Dominios autorizados nuevos: ${c.to}` : `• ${c.field === 'dominio' ? 'Dominio' : c.field === 'baseUrl' ? 'URL base' : 'Referer'}: ${c.from} → ${c.to}`).join('\n');
+/** Confirmación explícita (diálogo del navegador) de cambios sensibles de una extensión. */
+export const confirmChanges = ({ ext, text }) => window.confirm(`La extensión "${ext.name}" quiere cambiar:\n\n${text}\n\nLas obras, capítulos y progreso seguirán asociados a ella y sus pedidos irán a los datos nuevos.\n¿Aplicar el cambio? (Cancelar la deja como estaba.)`);
+const cancelled = () => Object.assign(new Error('Actualización cancelada: la extensión no se modificó.'), { cancelled: true });
+
+/** Aplica un manifiesto nuevo a una extensión existente (misma id local), confirmando lo sensible. */
+async function applyUpdate(prev, manifest, manifestUrl, confirm) {
+  const ch = sensitiveChanges(prev.manifest, manifest);
+  if (ch.length && !(confirm && (await confirm({ ext: prev, manifest, changes: ch, text: describeChanges(ch) })))) throw cancelled();
+  updateExtension(prev.id, { ...manifestBase(manifest, manifestUrl || prev.manifestUrl), status: { state: 'available', at: Date.now() } });
+  return getExtension(prev.id);
+}
+const manifestBase = (manifest, manifestUrl) => ({ type: 'manifest', manifest, manifestUrl: manifestUrl || '', name: String(manifest.name).slice(0, 40), version: String(manifest.version), url: manifest.baseUrl, searchUrl: manifest.search ? 'manifest' : '', icon: manifest.icon || `${new URL(manifest.baseUrl).origin}/favicon.ico` });
+
+/**
+ * Instala una extensión JSON. Si ya está instalada la MISMA identidad (id + dominio) se actualiza
+ * (lo sensible pide confirmación con `confirm`). El mismo id desde otro dominio se instala como una
+ * fuente distinta: no reemplaza a la existente ni hereda sus obras, capítulos o progreso.
+ */
+export async function installManifest(manifest, manifestUrl, { confirm } = {}) {
   const errs = validateManifest(manifest);
   if (errs.length) throw new Error('Extensión inválida: ' + errs.join(' '));
-  const prev = list.find((e) => e.manifest?.id === manifest.id);
-  const base = { type: 'manifest', manifest, manifestUrl: manifestUrl || prev?.manifestUrl || '', name: String(manifest.name).slice(0, 40), version: String(manifest.version), url: manifest.baseUrl, searchUrl: manifest.search ? 'manifest' : '', icon: manifest.icon || `${new URL(manifest.baseUrl).origin}/favicon.ico` };
-  if (prev) { updateExtension(prev.id, { ...base, status: { state: 'available', at: Date.now() } }); return getExtension(prev.id); }
-  const ext = { id: stableId(`manifest:${manifest.id}`, `mf-${manifest.id}`), ...base, enabled: true, addedAt: Date.now(), status: { state: 'available', at: Date.now() } };
+  const identity = manifestIdentity(manifest);
+  const prev = list.find((e) => e.type === 'manifest' && identityOf(e) === identity);
+  if (prev) return applyUpdate(prev, manifest, manifestUrl, confirm);
+  const dom = normDomain(manifest.baseUrl);
+  const twin = list.some((e) => e.manifest?.id === manifest.id) || Object.values(loadGone()).some((g) => g.manifestId === manifest.id && g.identity !== identity);
+  const base = manifestBase(manifest, manifestUrl);
+  if (twin) base.name = `${String(manifest.name).slice(0, 26)} (${dom})`.slice(0, 40); // se distingue de la homónima
+  const ext = { id: stableId(identity, `mf-${manifest.id}`, `mf-${manifest.id}--${dom.replace(/[^a-z0-9]+/g, '-')}`), ...base, enabled: true, addedAt: Date.now(), status: { state: 'available', at: Date.now() } };
   save([...list, ext]);
   return ext;
 }
 
-/** Vuelve a leer el manifiesto desde su URL. Devuelve {ext, changed, from, to}. */
-export async function refreshExtension(id) {
+/** Vuelve a leer el manifiesto desde su URL. Un cambio de dominio, referer o hosts pide confirmación. */
+export async function refreshExtension(id, { confirm } = {}) {
   const x = getExtension(id);
   if (x?.type !== 'manifest' || !x.manifestUrl) return { ext: x, changed: false };
   const m = await fetchManifest(x.manifestUrl);
   const from = x.version;
   if (m.id !== x.manifest.id) throw new Error(`El archivo es de otra extensión ("${m.id}").`);
-  const ext = installManifest(m, x.manifestUrl);
-  return { ext, changed: from !== ext.version, from, to: ext.version };
+  const errs = validateManifest(m);
+  if (errs.length) throw new Error('Extensión inválida: ' + errs.join(' '));
+  const ext = await applyUpdate(x, m, x.manifestUrl, confirm);
+  return { ext, changed: from !== ext.version || normDomain(m.baseUrl) !== normDomain(x.manifest.baseUrl), from, to: ext.version };
 }
 
-export async function addExtension({ url, name, searchUrl, json }) {
-  if (json) return installManifest(typeof json === 'string' ? JSON.parse(json) : json);
+export async function addExtension({ url, name, searchUrl, json, confirm }) {
+  if (json) return installManifest(typeof json === 'string' ? JSON.parse(json) : json, undefined, { confirm });
   url = url.trim();
   if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
   const u = new URL(url.replace(/\{page\}|\{q\}/g, '1'));
   const { type, json: data } = await detectType(u.href);
-  if (type === 'manifest') return installManifest(data, u.href);
+  if (type === 'manifest') return installManifest(data, u.href, { confirm });
   let title = name?.trim();
   if (!title) {
     try {
@@ -105,7 +158,7 @@ export async function addExtension({ url, name, searchUrl, json }) {
 export const updateExtension = (id, patch) => save(list.map((e) => (e.id === id ? { ...e, ...patch } : e)));
 export function removeExtension(id) {
   const x = getExtension(id);
-  if (x) { const g = loadGone(); g[id] = { identity: identityOf(x), name: x.name, manifestId: x.manifest?.id, at: Date.now() }; saveGone(g); }
+  if (x) { const g = loadGone(); g[id] = { identity: identityOf(x), name: x.name, manifestId: x.manifest?.id, domain: normDomain(x.manifest?.baseUrl || x.url), at: Date.now() }; saveGone(g); }
   save(list.filter((e) => e.id !== id));
 }
 
@@ -331,6 +384,9 @@ export async function checkExtension(id) {
 }
 
 /** Política de dominios de la extensión dueña de un capítulo "mf:" (para imágenes por proxy). */
+/** Dominios autorizados de una extensión (solo JSON); undefined = extensión HTML (sin límite). */
+export const extHosts = (ext) => (ext?.type === 'manifest' && ext.manifest ? hostPolicy(ext.manifest) : undefined);
+
 export function chapterHosts(url, extId) {
   if (!/^mf:/.test(url || '')) return undefined;
   const ext = extensionForUrl(url, extId);

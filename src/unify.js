@@ -100,7 +100,7 @@ export function groupWorks(entries, ov = overrides) {
       if (!maybe.some((m) => m.key === keys[o]) && !has(ov.splits, keys[inI ? i : j], keys[o])) maybe.push({ key: keys[o], title: entries[o].item.title, ext: entries[o].ext, item: entries[o].item, mine: keys[inI ? i : j] });
     }
     out.push({
-      key: src.map((s) => s.key).sort()[0], title, altTitles: alts.slice(0, 20), cover: pick('cover'), description: longest('description'),
+      key: src.map((s) => s.key).sort()[0], title, altTitles: alts.slice(0, 20), cover: pick('cover'), coverExt: src.find((s) => s.item.cover)?.ext, description: longest('description'),
       author: pick('author'), artist: pick('artist'), status: pick('status'), genres: [...new Set(src.flatMap((s) => s.item.genres || []))],
       updatedAt: src.map((s) => s.item.updatedAt).filter(Boolean).sort().at(-1), sources: src, maybe,
     });

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { proxied, activeProxy } from './sources/web.js';
 import { hueOf } from './covers.js';
+import { coverBlob } from './imgload.js';
 
 const P = {
   back: 'M15 18l-6-6 6-6',
@@ -37,27 +38,52 @@ export function Icon({ n, size = 20, fill }) {
   );
 }
 
-/** src para Blob (local) o URL remota (vía proxy si hay uno, con referer). */
-export function useSrc(v, referer) {
+/**
+ * src para Blob (local) o URL remota (vía proxy si hay uno, con referer). Con `hosts` (extensiones
+ * JSON) la URL remota nunca va a un <img>: se pide con fetchVia estricto y se muestra como Blob, así
+ * una redirección a un dominio no declarado se rechaza. `active=false` difiere la carga (lazy).
+ */
+export function useSrc(v, referer, hosts, active = true) {
   const [src, set] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const hk = hosts?.join(',') || '';
   useEffect(() => {
+    setFailed(false);
     if (!v) return set(null);
+    if (typeof v === 'string' && hk) {
+      set(null);
+      if (!active) return;
+      let alive = true, obj = null;
+      coverBlob(v, referer, hk.split(',')).then(
+        (b) => { if (alive) { obj = URL.createObjectURL(b); set(obj); } },
+        () => { if (alive) setFailed(true); },
+      );
+      return () => { alive = false; if (obj) URL.revokeObjectURL(obj); };
+    }
     if (typeof v === 'string') return set(activeProxy() ? proxied(v, referer) : v);
     const u = URL.createObjectURL(v);
     set(u);
     return () => URL.revokeObjectURL(u);
-  }, [v, referer]);
-  return src;
+  }, [v, referer, hk, active]);
+  return failed ? null : src;
 }
 
 /** Portada 2:3. Si no hay imagen (o falla), muestra una portada tipográfica de respaldo. */
-export function Cover({ src, title, kind, referer, children }) {
-  const s = useSrc(src, referer);
+export function Cover({ src, title, kind, referer, hosts, children }) {
+  const ref = useRef(null);
+  const [near, setNear] = useState(!hosts?.length);
+  useEffect(() => {
+    if (near || !ref.current) return;
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) setNear(true); }, { rootMargin: '400px' });
+    io.observe(ref.current);
+    return () => io.disconnect();
+  }, [near]);
+  const s = useSrc(src, referer, hosts, near);
   const [bad, setBad] = useState(false);
   useEffect(() => setBad(false), [s]);
   const show = s && !bad;
   return (
-    <div className="cover">
+    <div className="cover" ref={ref}>
       {show
         ? <img src={s} alt={title || ''} loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setBad(true)} />
         : <FallbackCover title={title} kind={kind} />}
@@ -78,8 +104,8 @@ function FallbackCover({ title = '', kind }) {
 }
 
 /** Fondo difuminado con la portada (banner de ficha). */
-export function BgCover({ src, referer }) {
-  const s = useSrc(src, referer);
+export function BgCover({ src, referer, hosts }) {
+  const s = useSrc(src, referer, hosts);
   return <div className="bg-cover" style={s ? { backgroundImage: `url("${s}")` } : undefined} aria-hidden="true" />;
 }
 

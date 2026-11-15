@@ -116,7 +116,8 @@ Si se instala de nuevo un manifiesto con el mismo `id`, la extensión se actuali
 - **Cómo se comparan:**
   - Los dominios de `baseUrl` y de `hosts` se comparan exactos, con el puerto incluido. Un subdominio solo se acepta si se declara, o si cae bajo un comodín.
   - `baseUrl`, `referer` e `icon` tienen que ser URLs http(s) absolutas, sin usuario ni contraseña.
-- **Redirecciones:** cada salto se vuelve a comprobar. Si una respuesta redirige a un dominio que no está en `baseUrl` ni en `hosts`, la petición se rechaza y la extensión queda como "API incompatible" (redirección no autorizada). Esto se aplica en el navegador y en el backend.
+- **Redirecciones:** cada salto se vuelve a comprobar, en el navegador y en el backend. Si una respuesta (datos, imagen de capítulo o portada) redirige a un dominio que no está en `baseUrl` ni en `hosts`, se rechaza. El diagnóstico muestra la URL original, el dominio de destino, el motivo y el dominio que habría que agregar a `hosts` si es legítimo (por ejemplo, un CDN).
+- **Imágenes y portadas:** nunca se cargan con la URL remota directa. Pasan por el proxy propio con los dominios autorizados, o, sin backend, por un acceso directo que no sigue redirecciones. Se muestran como Blob. Sin backend, una imagen que redirige (aunque sea a un CDN declarado) no se puede verificar y se rechaza: declarar el CDN y servir la URL final evita la redirección. Nunca se usan proxies públicos. Una portada rechazada no se guarda en la biblioteca.
 - **HTTPS:** si `baseUrl` es `https://`, no se aceptan URLs ni redirecciones a `http://` (portadas, imágenes, paginación o capítulos).
 
 ### Rutas a los datos
@@ -153,7 +154,9 @@ Las listas de capítulos se cortan en 50 páginas. Si una página siguiente fall
 - `filter` deja pasar solo los capítulos cuyos campos coinciden. Acepta un valor o una lista de valores.
 - La lista final se ordena por número y no tiene duplicados.
 - Internamente, cada capítulo se identifica como `mf:<id-de-extensión>/c/<id>`. Si se reinstala la extensión con el mismo `id`, los capítulos guardados siguen funcionando.
-- La identidad de la extensión es su `id`. Si se elimina y se vuelve a instalar un manifiesto con el mismo `id`, Manhuua reutiliza la misma fuente: las obras, capítulos, descargas, progreso e historial quedan asociados y no se crea una fuente duplicada. Una extensión con otro `id` es otra fuente aunque tenga el mismo nombre o dominio.
+- La identidad de la extensión es su `id` **más el dominio de `baseUrl`** (en minúsculas, con puerto si no es el estándar). Si se elimina y se vuelve a instalar la misma identidad, Manhuua reutiliza la misma fuente: las obras, capítulos, descargas, progreso e historial quedan asociados y no se crea una fuente duplicada. El mismo `id` desde otro dominio es **otra fuente**: no reemplaza a la instalada ni hereda sus datos (se muestra con el dominio en el nombre).
+- Al actualizar (botón "Actualizar" o reinstalando), un cambio de dominio o de `baseUrl`, de `referer` o dominios nuevos en `hosts` piden confirmación explícita. Si se cancela, la extensión queda como estaba.
+- Datos de versiones anteriores de una extensión ya eliminada (sin registro de identidad) no se reasocian solos: la ficha de la obra ofrece "Reasociar con …" y pide confirmación.
 
 ## Estados de una extensión
 

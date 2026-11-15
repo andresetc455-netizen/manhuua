@@ -2,7 +2,7 @@
 // actualizar y eliminar. Muestra el estado de cada fuente sin confundir un bloqueo de la fuente
 // (403) con una falla de Manhuua.
 import { useState } from 'react';
-import { useExtensions, addExtension, updateExtension, removeExtension, checkExtension, refreshExtension, isEnabled } from '../sources/extensions.js';
+import { useExtensions, addExtension, updateExtension, removeExtension, checkExtension, refreshExtension, isEnabled, confirmChanges } from '../sources/extensions.js';
 import { STATES, ERROR_KINDS } from '../sources/engine.js';
 import { Icon, Favicon, go } from '../ui.jsx';
 
@@ -26,7 +26,7 @@ function Install() {
   const run = async (args) => {
     setBusy(true); setMsg(null);
     try {
-      const x = await addExtension(args);
+      const x = await addExtension({ ...args, confirm: confirmChanges });
       setMsg({ ok: true, text: `Instalada: ${x.name}${x.version ? ` v${x.version}` : ''}. Comprobando…` });
       setUrl(''); setJson('');
       const st = await checkExtension(x.id);
@@ -88,7 +88,7 @@ function Row({ x }) {
       {note && <p className="error small">{note}</p>}
       <div className="row">
         <button className="btn sm" disabled={!!busy || !isEnabled(x)} onClick={() => act('c', () => checkExtension(x.id))}><Icon n="refresh" size={14} /> {busy === 'c' ? 'Comprobando…' : 'Comprobar'}</button>
-        {x.type === 'manifest' && x.manifestUrl && <button className="btn sm" disabled={!!busy} onClick={() => act('u', async () => { const r = await refreshExtension(x.id); setNote(r.changed ? `Actualizada de v${r.from} a v${r.to}.` : 'Ya estaba actualizada.'); })}><Icon n="down" size={14} /> {busy === 'u' ? 'Actualizando…' : 'Actualizar'}</button>}
+        {x.type === 'manifest' && x.manifestUrl && <button className="btn sm" disabled={!!busy} onClick={() => act('u', async () => { const r = await refreshExtension(x.id, { confirm: confirmChanges }); setNote(r.changed ? `Actualizada de v${r.from} a v${r.to}.` : 'Ya estaba actualizada.'); })}><Icon n="down" size={14} /> {busy === 'u' ? 'Actualizando…' : 'Actualizar'}</button>}
         <button className="btn sm" onClick={() => updateExtension(x.id, { enabled: !isEnabled(x) })}>{isEnabled(x) ? 'Desactivar' : 'Activar'}</button>
         {isEnabled(x) && <button className="btn sm" onClick={() => go(`/ext/${x.id}`)}>Abrir</button>}
         <button className="btn sm danger" onClick={() => confirm(`¿Eliminar la extensión "${x.name}"?\n\nTu biblioteca no se toca: las obras, portadas, progreso, historial y capítulos descargados se conservan.`) && removeExtension(x.id)}><Icon n="trash" size={14} /> Eliminar</button>

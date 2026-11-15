@@ -189,7 +189,7 @@ describe('seguridad: redirecciones en el navegador', async () => {
   it('acceso directo: una redirección no verificable se rechaza (no se sigue)', async () => {
     const f = vi.fn(async (u, o) => (o?.redirect === 'manual' ? { type: 'opaqueredirect', status: 0, ok: false, headers: new Headers() } : new Response('{}')));
     vi.stubGlobal('fetch', f);
-    await expect(fetchVia('https://api.test/a', 'text', undefined, undefined, { hosts })).rejects.toThrow(/redirección/);
+    await expect(fetchVia('https://api.test/a', 'text', undefined, undefined, { hosts })).rejects.toThrow(/redirecci[oó]n/i);
     expect(f.mock.calls[0][1]).toEqual({ redirect: 'manual' });
     expect(f.mock.calls.some(([u]) => /corsproxy|allorigins|codetabs/.test(u))).toBe(false); // sin proxies públicos
   });
@@ -198,7 +198,15 @@ describe('seguridad: redirecciones en el navegador', async () => {
     await expect(fetchVia('https://evil.test/a', 'text', undefined, undefined, { hosts })).rejects.toThrow(/no autorizado/);
     const r = new Response('{}'); Object.defineProperty(r, 'url', { value: 'https://evil.test/x' });
     vi.stubGlobal('fetch', vi.fn(async () => r));
-    await expect(fetchVia('https://api.test/a', 'text', undefined, undefined, { hosts })).rejects.toThrow(/no autorizado/);
+    await expect(fetchVia('https://api.test/a', 'text', undefined, undefined, { hosts })).rejects.toThrow(/no declarado/);
+  });
+  it('diagnóstico: URL original, dominio de destino, motivo y dominio a agregar', async () => {
+    const r = new Response('{}'); Object.defineProperty(r, 'url', { value: 'https://img.cdn2.test/p.png' });
+    vi.stubGlobal('fetch', vi.fn(async () => r));
+    const e = await fetchVia('https://cdn.test/p.png', 'blob', undefined, undefined, { hosts }).catch((x) => x);
+    expect(e).toMatchObject({ policy: true, from: 'https://cdn.test/p.png', toHost: 'img.cdn2.test', reason: 'host', suggest: 'img.cdn2.test' });
+    expect(e.message).toMatch(/https:\/\/cdn\.test\/p\.png → img\.cdn2\.test/);
+    expect(e.message).toMatch(/agregá "img\.cdn2\.test" a "hosts"/);
   });
   it('sin política (extensiones web anteriores) el comportamiento no cambia', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('hola')));

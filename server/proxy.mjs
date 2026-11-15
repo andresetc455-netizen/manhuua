@@ -20,7 +20,7 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 function corsHeaders(req) {
   const o = req.headers.origin;
-  const expose = { 'access-control-expose-headers': 'x-final-url, x-manhuua-error, x-upstream-server, x-upstream-challenge, retry-after' };
+  const expose = { 'access-control-expose-headers': 'x-final-url, x-manhuua-error, x-manhuua-blocked-url, x-manhuua-blocked-reason, x-upstream-server, x-upstream-challenge, retry-after' };
   if (!C.origins.length) return { 'access-control-allow-origin': '*', ...expose };
   return o && originAllowed(o, C.origins) ? { 'access-control-allow-origin': o, vary: 'Origin', ...expose } : { vary: 'Origin' };
 }
@@ -36,7 +36,7 @@ async function fetchPublic(raw, referer, policy = []) {
   let url = raw;
   for (let hop = 0; hop < 6; hop++) {
     const u = new URL(url);
-    if (policy.length && !hostAllowed(u.href, policy)) throw Object.assign(new Error(`${hop ? 'Redirección' : 'Petición'} a un dominio no autorizado por la extensión (${u.host})`), { code: 403 });
+    if (policy.length && !hostAllowed(u.href, policy)) throw Object.assign(new Error(`${hop ? 'Redirección' : 'Petición'} a un dominio no autorizado por la extensión (${u.host})`), { code: 403, blocked: { url: u.href, reason: 'host' } });
     const r = await safeRequest(u.href, {
       timeoutMs: C.fetchTimeoutMs, allowPrivate: C.allowPrivate,
       headers: { 'user-agent': UA, accept: '*/*', 'accept-language': 'es,en;q=0.8', referer: referer || u.origin + '/' },
@@ -45,7 +45,7 @@ async function fetchPublic(raw, referer, policy = []) {
     if (!loc) return { r: { status: r.status, ok: r.status >= 200 && r.status < 300, headers: { get: r.get }, body: r.body }, finalUrl: u.href };
     r.body.resume(); // descartar el cuerpo de la redirección
     const nextUrl = new URL(loc, u);
-    if (policy.length && u.protocol === 'https:' && nextUrl.protocol === 'http:') throw Object.assign(new Error(`Redirección de HTTPS a HTTP rechazada (${nextUrl.host})`), { code: 403 });
+    if (policy.length && u.protocol === 'https:' && nextUrl.protocol === 'http:') throw Object.assign(new Error(`Redirección de HTTPS a HTTP rechazada (${nextUrl.host})`), { code: 403, blocked: { url: nextUrl.href, reason: 'downgrade' } });
     url = nextUrl.href;
   }
   throw Object.assign(new Error('Demasiadas redirecciones'), { code: 508 });
@@ -72,7 +72,9 @@ async function proxy(req, u, res, cors) {
     }, buf);
   } catch (e) {
     const code = Number.isInteger(e.code) && e.code >= 400 ? e.code : e.name === 'TimeoutError' ? 504 : 502;
-    send(res, code, { ...cors, 'content-type': 'text/plain; charset=utf-8', 'x-manhuua-error': '1' }, 'manhuua-proxy: ' + e.message);
+    // Diagnóstico de política: a qué URL se intentó ir y por qué se rechazó.
+    const blocked = e.blocked ? { 'x-manhuua-blocked-url': e.blocked.url, 'x-manhuua-blocked-reason': e.blocked.reason } : {};
+    send(res, code, { ...cors, 'content-type': 'text/plain; charset=utf-8', 'x-manhuua-error': '1', ...blocked }, 'manhuua-proxy: ' + e.message);
   }
 }
 

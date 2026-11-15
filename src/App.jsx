@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSettings } from './settings.js';
-import { useExtensions, addExtension, isEnabled } from './sources/extensions.js';
+import { useExtensions, addExtension, isEnabled, confirmChanges } from './sources/extensions.js';
 import { detectProxy } from './sources/web.js';
 import { detectRender } from './sources/engine.js';
 import { useDownloads } from './downloads.js';
@@ -49,7 +49,7 @@ function AddExtension({ onClose }) {
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
-    try { const x = await addExtension({ url, name, searchUrl }); onClose(); go(`/ext/${x.id}`); }
+    try { const x = await addExtension({ url, name, searchUrl, confirm: confirmChanges }); onClose(); go(`/ext/${x.id}`); }
     catch (err) { alert(err.message); setBusy(false); }
   };
   return (

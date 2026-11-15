@@ -308,6 +308,8 @@ input[type=range] { accent-color: var(--accent); width: 100%; }
   padding: 24px; background: #17171c; border: 1px dashed #4a4a55; color: #ddd; }
 .pg-err .btn { margin-top: 4px; }
 .paged .pg-err { min-height: 60vh; }
+.pg-wait { display: block; width: 100%; min-height: 60vh; background: #111; margin: 0 auto; }
+.paged .pg-wait { width: min(100%, 820px); }
 .r-state { max-width: 640px; margin: 0 auto; padding: 96px 20px; display: grid; gap: 12px; text-align: center; }
 .r-state .row { justify-content: center; }
 /* Ficha de extensión */

@@ -13,7 +13,9 @@ const TILE = 2400, STEP = 2100;
 
 /** OCR de una imagen (Blob/URL). Devuelve {w, h, items:[{x,y,w,h,text}]} en px de la imagen. */
 async function ocr(src, lang) {
-  const blob = typeof src === 'string' && !src.startsWith('blob:') ? await (await fetch(proxied(src))).blob() : await (await fetch(src)).blob();
+  // src: función que entrega el Blob (páginas en línea, ya por el camino verificado), Blob, blob: o URL.
+  if (typeof src === 'function') src = await src();
+  const blob = src instanceof Blob ? src : typeof src === 'string' && !src.startsWith('blob:') ? await (await fetch(proxied(src))).blob() : await (await fetch(src)).blob();
   const bmp = await createImageBitmap(blob);
   const { width: W, height: H } = bmp;
   const worker = await getWorker(lang);
