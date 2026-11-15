@@ -110,8 +110,9 @@ export async function loadPages(chapter, { force = false } = {}) {
     return { urls, dispose: () => urls.forEach(URL.revokeObjectURL) };
   }
   const { resolvePages } = await import('./online.js');
+  const { chapterHosts } = await import('./sources/extensions.js');
   const urls = await resolvePages(chapter, { force });
-  return { urls, online: true, referer: /^https?:/.test(chapter.url || '') ? chapter.url : undefined, dispose() {} };
+  return { urls, online: true, referer: /^https?:/.test(chapter.url || '') ? chapter.url : undefined, hosts: chapterHosts(chapter.url, chapter.sourceId), dispose() {} };
 }
 
 /** Siguiente capítulo a leer en una serie. */

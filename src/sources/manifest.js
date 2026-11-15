@@ -146,6 +146,8 @@ function authorized(m) {
 export function allowedUrl(m, url) {
   let u; try { u = new URL(url); } catch { return false; }
   if (!/^https?:$/.test(u.protocol) || u.username || u.password) return false;
+  // Una fuente HTTPS no baja a HTTP (ni datos ni imágenes).
+  if (/^https:/i.test(m.baseUrl) && u.protocol === 'http:') return false;
   const host = u.host.toLowerCase();
   const [hh, hp] = host.split(':');
   return authorized(m).some((a) => {
@@ -155,12 +157,15 @@ export function allowedUrl(m, url) {
   });
 }
 const allowed = allowedUrl;
+/** Política de dominios que se envía al proxy y se aplica a cada redirección. */
+export const hostPolicy = (m) => authorized(m).map((a) => (a.wildcard ? '*.' : '') + a.host);
 
 class ApiError extends Error {}
+const isPolicy = (e) => e.policy || e.source === 'policy' || /no autorizado por la extensión|dominio no autorizado|de HTTPS a HTTP|no se puede verificar su destino|no informa el destino/i.test(e.message || '');
 async function getJson(m, url, trace) {
   if (!url) throw Object.assign(new ApiError('La plantilla de URL usa un dato que la respuesta no trae.'), { kind: 'incompatible' });
   if (!allowed(m, url)) throw Object.assign(new ApiError(`La extensión intentó pedir datos a otro dominio (${new URL(url).host}); no está permitido.`), { kind: 'incompatible' });
-  const t = await fetchVia(url, 'text', m.referer, trace);
+  const t = await fetchVia(url, 'text', m.referer, trace, { hosts: hostPolicy(m) });
   try { const j = JSON.parse(t); if (j && typeof j === 'object') return j; } catch {}
   throw Object.assign(new ApiError('La respuesta no es JSON: la API cambió o la URL no es de una API.'), { kind: 'incompatible' });
 }
@@ -218,7 +223,8 @@ export async function mBrowse(ext, { query, page = 1 } = {}) {
 
 function errDiag(diag, e, t0) {
   const last = diag.attempts.at(-1) || {};
-  Object.assign(diag, { ms: Date.now() - t0, count: 0, httpError: e.message, httpStatus: e.status ?? last.status, errorSource: e.kind ? undefined : e.source || last.source, challenge: e.challenge || last.challenge, incompatible: e.kind === 'incompatible' });
+  Object.assign(diag, { ms: Date.now() - t0, count: 0, httpError: e.message, httpStatus: e.status ?? last.status, errorSource: e.kind ? undefined : e.source || last.source, challenge: e.challenge || last.challenge, incompatible: e.kind === 'incompatible' || isPolicy(e) });
+  if (isPolicy(e)) diag.errorSource = 'policy';
   diag.reasons = diag.incompatible ? [e.message] : explain(diag, diag.kind === 'catalog' ? 'obras' : 'capítulos');
   return diag;
 }

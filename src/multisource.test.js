@@ -162,6 +162,9 @@ describe('seguridad: dominios autorizados (hosts)', () => {
     expect(allowedUrl(m, 'https://evilapi.x.com/a')).toBe(false);
     expect(allowedUrl(m, 'https://u:p@api.x.com/a')).toBe(false);
     expect(allowedUrl(m, 'javascript:alert(1)')).toBe(false);
+    expect(allowedUrl(m, 'http://api.x.com/a')).toBe(false); // fuente HTTPS: no se baja a HTTP
+    expect(allowedUrl(m, 'http://cdn.x.com/a.png')).toBe(false);
+    expect(allowedUrl({ baseUrl: 'http://api.y.com' }, 'http://api.y.com/a')).toBe(true);
     expect(allowedUrl({ ...m, hosts: 'com' }, 'https://evil.com/')).toBe(false); // hosts inválido guardado: se ignora
     expect(allowedUrl({ ...m, hosts: ['com', '*'] }, 'https://evil.com/')).toBe(false);
   });
@@ -177,5 +180,28 @@ describe('seguridad: dominios autorizados (hosts)', () => {
     expect(d.chapters).toHaveLength(1);
     expect(d.diag.pageError).toMatch(/otro dominio/);
     expect(fetch.mock.calls.some(([u]) => String(u).includes('evil.test'))).toBe(false);
+  });
+});
+
+describe('seguridad: redirecciones en el navegador', async () => {
+  const { fetchVia } = await import('./sources/web.js');
+  const hosts = ['api.test', 'cdn.test'];
+  it('acceso directo: una redirección no verificable se rechaza (no se sigue)', async () => {
+    const f = vi.fn(async (u, o) => (o?.redirect === 'manual' ? { type: 'opaqueredirect', status: 0, ok: false, headers: new Headers() } : new Response('{}')));
+    vi.stubGlobal('fetch', f);
+    await expect(fetchVia('https://api.test/a', 'text', undefined, undefined, { hosts })).rejects.toThrow(/redirección/);
+    expect(f.mock.calls[0][1]).toEqual({ redirect: 'manual' });
+    expect(f.mock.calls.some(([u]) => /corsproxy|allorigins|codetabs/.test(u))).toBe(false); // sin proxies públicos
+  });
+  it('URL final fuera de la política o URL inicial no autorizada', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Object.assign(new Response('{}'), {}) ));
+    await expect(fetchVia('https://evil.test/a', 'text', undefined, undefined, { hosts })).rejects.toThrow(/no autorizado/);
+    const r = new Response('{}'); Object.defineProperty(r, 'url', { value: 'https://evil.test/x' });
+    vi.stubGlobal('fetch', vi.fn(async () => r));
+    await expect(fetchVia('https://api.test/a', 'text', undefined, undefined, { hosts })).rejects.toThrow(/no autorizado/);
+  });
+  it('sin política (extensiones web anteriores) el comportamiento no cambia', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('hola')));
+    expect(await fetchVia('https://cualquiera.test/a')).toBe('hola');
   });
 });

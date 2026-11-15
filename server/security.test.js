@@ -4,7 +4,7 @@ import { isPrivateIp, assertPublicUrl, originAllowed, parseOrigins, rateLimiter,
 
 describe('seguridad del backend', () => {
   it('detecta IPs internas', () => {
-    for (const ip of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1']) expect(isPrivateIp(ip), ip).toBe(true);
+    for (const ip of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1', '::ffff:7f00:1']) expect(isPrivateIp(ip), ip).toBe(true);
     for (const ip of ['8.8.8.8', '104.16.1.1', '2606:4700::1111']) expect(isPrivateIp(ip), ip).toBe(false);
   });
   it('bloquea destinos internos y esquemas raros', async () => {

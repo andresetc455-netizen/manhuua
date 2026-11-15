@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { render, renderAvailable, closeBrowser } from './render.mjs';
-import { loadConfig, originAllowed, assertPublicUrl, rateLimiter, clientIp, readLimited, limiter } from './security.mjs';
+import { loadConfig, originAllowed, assertPublicUrl, rateLimiter, clientIp, readLimited, limiter, safeRequest, parseHostPolicy, hostAllowed } from './security.mjs';
 
 const C = loadConfig();
 const DIST = path.resolve(import.meta.dirname, '../dist');
@@ -27,19 +27,26 @@ function corsHeaders(req) {
 const send = (res, code, headers, body) => { if (!res.headersSent) res.writeHead(code, headers); res.end(body); };
 const sendJson = (res, code, cors, obj, extra = {}) => send(res, code, { ...cors, ...extra, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }, JSON.stringify(obj));
 
-/** Descarga siguiendo redirecciones a mano para validar cada salto (evita SSRF por redirección). */
-async function fetchPublic(raw, referer) {
+/**
+ * Descarga siguiendo redirecciones a mano. Cada salto: URL http(s) sin credenciales, conexión a una IP
+ * validada en el mismo momento de conectar (sin DNS rebinding) y, si la extensión declaró dominios
+ * (hosts), el destino tiene que estar entre ellos y no se baja de HTTPS a HTTP.
+ */
+async function fetchPublic(raw, referer, policy = []) {
   let url = raw;
   for (let hop = 0; hop < 6; hop++) {
-    const u = await assertPublicUrl(url, { allowPrivate: C.allowPrivate });
-    const r = await fetch(u, {
-      redirect: 'manual',
-      signal: AbortSignal.timeout(C.fetchTimeoutMs),
+    const u = new URL(url);
+    if (policy.length && !hostAllowed(u.href, policy)) throw Object.assign(new Error(`${hop ? 'Redirección' : 'Petición'} a un dominio no autorizado por la extensión (${u.host})`), { code: 403 });
+    const r = await safeRequest(u.href, {
+      timeoutMs: C.fetchTimeoutMs, allowPrivate: C.allowPrivate,
       headers: { 'user-agent': UA, accept: '*/*', 'accept-language': 'es,en;q=0.8', referer: referer || u.origin + '/' },
     });
-    const loc = r.status >= 300 && r.status < 400 && r.headers.get('location');
-    if (!loc) return { r, finalUrl: u.href };
-    url = new URL(loc, u).href;
+    const loc = r.status >= 300 && r.status < 400 && r.get('location');
+    if (!loc) return { r: { status: r.status, ok: r.status >= 200 && r.status < 300, headers: { get: r.get }, body: r.body }, finalUrl: u.href };
+    r.body.resume(); // descartar el cuerpo de la redirección
+    const nextUrl = new URL(loc, u);
+    if (policy.length && u.protocol === 'https:' && nextUrl.protocol === 'http:') throw Object.assign(new Error(`Redirección de HTTPS a HTTP rechazada (${nextUrl.host})`), { code: 403 });
+    url = nextUrl.href;
   }
   throw Object.assign(new Error('Demasiadas redirecciones'), { code: 508 });
 }
@@ -48,7 +55,8 @@ async function proxy(req, u, res, cors) {
   const target = u.searchParams.get('url') || '';
   if (!/^https?:\/\//i.test(target)) return send(res, 400, cors, 'manhuua-proxy: parámetro url inválido');
   try {
-    const { r, finalUrl } = await fetchPublic(target, u.searchParams.get('referer'));
+    const policy = parseHostPolicy(u.searchParams.get('hosts') || '');
+    const { r, finalUrl } = await fetchPublic(target, u.searchParams.get('referer'), policy);
     const buf = await readLimited(r, C.maxBytes);
     send(res, r.status, {
       ...cors,
@@ -63,7 +71,7 @@ async function proxy(req, u, res, cors) {
       'x-content-type-options': 'nosniff',
     }, buf);
   } catch (e) {
-    const code = e.code && e.code >= 400 ? e.code : e.name === 'TimeoutError' ? 504 : 502;
+    const code = Number.isInteger(e.code) && e.code >= 400 ? e.code : e.name === 'TimeoutError' ? 504 : 502;
     send(res, code, { ...cors, 'content-type': 'text/plain; charset=utf-8', 'x-manhuua-error': '1' }, 'manhuua-proxy: ' + e.message);
   }
 }

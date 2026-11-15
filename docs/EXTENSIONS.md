@@ -116,6 +116,8 @@ Si se instala de nuevo un manifiesto con el mismo `id`, la extensión se actuali
 - **Cómo se comparan:**
   - Los dominios de `baseUrl` y de `hosts` se comparan exactos, con el puerto incluido. Un subdominio solo se acepta si se declara, o si cae bajo un comodín.
   - `baseUrl`, `referer` e `icon` tienen que ser URLs http(s) absolutas, sin usuario ni contraseña.
+- **Redirecciones:** cada salto se vuelve a comprobar. Si una respuesta redirige a un dominio que no está en `baseUrl` ni en `hosts`, la petición se rechaza y la extensión queda como "API incompatible" (redirección no autorizada). Esto se aplica en el navegador y en el backend.
+- **HTTPS:** si `baseUrl` es `https://`, no se aceptan URLs ni redirecciones a `http://` (portadas, imágenes, paginación o capítulos).
 
 ### Rutas a los datos
 
@@ -151,6 +153,7 @@ Las listas de capítulos se cortan en 50 páginas. Si una página siguiente fall
 - `filter` deja pasar solo los capítulos cuyos campos coinciden. Acepta un valor o una lista de valores.
 - La lista final se ordena por número y no tiene duplicados.
 - Internamente, cada capítulo se identifica como `mf:<id-de-extensión>/c/<id>`. Si se reinstala la extensión con el mismo `id`, los capítulos guardados siguen funcionando.
+- La identidad de la extensión es su `id`. Si se elimina y se vuelve a instalar un manifiesto con el mismo `id`, Manhuua reutiliza la misma fuente: las obras, capítulos, descargas, progreso e historial quedan asociados y no se crea una fuente duplicada. Una extensión con otro `id` es otra fuente aunque tenga el mismo nombre o dominio.
 
 ## Estados de una extensión
 

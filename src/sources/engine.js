@@ -169,6 +169,7 @@ export const STATES = {
 export const ERROR_KINDS = {
   source: 'error de la fuente', backend: 'error del backend (Render)', cors: 'bloqueo CORS del navegador', network: 'sin conexión / fuente caída',
   extraction: 'error de extracción', incompatible: 'API incompatible', antibot: 'protección antibots',
+  policy: 'destino fuera de los dominios autorizados de la extensión',
 };
 /**
  * Clasifica el diagnóstico de una carga. Devuelve {state, kind, httpStatus, label}.
@@ -180,6 +181,7 @@ export function classify(d = {}) {
   const st = d.httpStatus ?? (ok ? undefined : fail.status);
   const src = d.errorSource || (ok ? undefined : fail.source);
   const out = (state, kind) => ({ state, kind, httpStatus: st, label: STATES[state] + (st && state !== 'ok' && state !== 'incompatible' ? ` (${st})` : '') });
+  if (src === 'policy' || /no autorizado por la extensión|dominio no autorizado|otro dominio|de HTTPS a HTTP|no se puede verificar su destino|no informa el destino/i.test(d.httpError || fail.error || '')) return out('incompatible', 'policy');
   if (d.incompatible) return out('incompatible', 'incompatible');
   if (!ok) {
     if (src === 'backend') return out('conn', 'backend');

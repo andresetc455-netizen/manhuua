@@ -3,7 +3,7 @@
 // Requiere:  npm i playwright  &&  npx playwright install chromium
 // No evade CAPTCHA ni protecciones antibots: si las detecta, lo informa y se detiene.
 import { createRequire } from 'node:module';
-import { assertPublicUrl } from './security.mjs';
+import { safeRequest, readLimited } from './security.mjs';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 const ANTIBOT = /just a moment|attention required|captcha|verify you are human|checking your browser|ddos-guard/i;
@@ -16,10 +16,18 @@ async function loadPlaywright() {
     catch { throw Object.assign(new Error('Renderizador no disponible: instalá Playwright con "npm i playwright && npx playwright install chromium"'), { code: 501 }); }
   }
 }
-async function browser() {
+// Con direcciones internas bloqueadas, Chromium no sale a la red por su cuenta: cada petición HTTP(S)
+// la hace el servidor con la IP validada (safeRequest) y se entrega con route.fulfill. Todo lo que no
+// pase por esa ruta (WebSocket, conexiones anticipadas, WebRTC) queda sin salida: proxy inexistente,
+// sin precarga DNS y WebRTC sin UDP directo.
+const LOCKDOWN = ['--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', '--dns-prefetch-disable', '--disable-features=NetworkPrediction,DnsOverHttps', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--webrtc-ip-handling-policy=disable_non_proxied_udp'];
+let lockedDown = null;
+async function browser(allowPrivate) {
+  if (browserP && lockedDown !== !allowPrivate) { await closeBrowser(); }
   if (!browserP) {
+    lockedDown = !allowPrivate;
     browserP = loadPlaywright()
-      .then((pw) => pw.chromium.launch({ args: ['--disable-dev-shm-usage', '--disable-gpu', '--no-zygote'] }))
+      .then((pw) => pw.chromium.launch({ args: ['--disable-dev-shm-usage', '--disable-gpu', '--no-zygote', ...(allowPrivate ? [] : LOCKDOWN)] }))
       .then((b) => { b.on('disconnected', () => { browserP = null; }); return b; })
       .catch((e) => { browserP = null; throw e; });
   }
@@ -30,18 +38,45 @@ export async function renderAvailable() { try { await loadPlaywright(); return t
 export async function closeBrowser() { if (browserP) await (await browserP.catch(() => null))?.close().catch(() => {}); browserP = null; }
 
 const HEAVY = new Set(['image', 'media', 'font']);
+const MAX_SUB = 15 * 1024 * 1024;
+const HOP = new Set(['content-length', 'transfer-encoding', 'connection', 'keep-alive', 'content-encoding']);
 
 export async function render(url, kind = 'catalog', { maxMs = 20000, allowPrivate = true } = {}) {
-  const b = await browser();
+  const b = await browser(allowPrivate);
   const ctx = await b.newContext({ userAgent: UA, locale: 'es-ES', viewport: { width: 1280, height: 1600 }, serviceWorkers: 'block' });
   // Solo hace falta el HTML: no descarga imágenes/video/fuentes (ahorra memoria y red) y, en
   // producción, no deja que la página pida direcciones internas.
   await ctx.route('**/*', async (route) => {
     const req = route.request();
     if (HEAVY.has(req.resourceType())) return route.abort();
-    if (!allowPrivate) { try { await assertPublicUrl(req.url()); } catch { return route.abort('blockedbyclient'); } }
-    return route.continue();
+    if (allowPrivate) return route.continue();
+    if (!/^https?:/i.test(req.url())) return route.abort('blockedbyclient');
+    try {
+      const hdr = Object.fromEntries(Object.entries(await req.allHeaders()).filter(([k]) => !k.startsWith(':') && !['host', 'connection', 'accept-encoding'].includes(k)));
+      // Chromium seguiría una redirección entregada con fulfill por fuera de esta ruta (y sin salida,
+      // por el proxy inexistente): las redirecciones se siguen acá, validando cada salto.
+      let url = req.url(), method = req.method(), body = req.postDataBuffer() || undefined, r;
+      for (let hop = 0; ; hop++) {
+        r = await safeRequest(url, { method, headers: hdr, body, timeoutMs: Math.min(15000, maxMs), allowPrivate: false });
+        const loc = r.status >= 300 && r.status < 400 && r.get('location');
+        if (!loc) break;
+        r.body.resume();
+        if (hop >= 5) throw new Error('Demasiadas redirecciones');
+        url = new URL(loc, url).href;
+        if (r.status !== 307 && r.status !== 308) { method = 'GET'; body = undefined; }
+      }
+      let out = await readLimited({ headers: { get: r.get }, body: r.body }, MAX_SUB);
+      const headers = Object.fromEntries(Object.entries(r.headers).filter(([k]) => !HOP.has(k)).map(([k, v]) => [k, Array.isArray(v) ? v.join('\n') : String(v)]));
+      // Documento redirigido: la página conserva su URL original, así que se fija la base real.
+      if (url !== req.url() && req.resourceType() === 'document' && /html/i.test(headers['content-type'] || '')) {
+        const base = `<base href="${url.replace(/"/g, '%22')}">`;
+        const html = out.toString('utf8');
+        out = Buffer.from(/<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (m) => m + base) : base + html);
+      }
+      return route.fulfill({ status: r.status, headers, body: out });
+    } catch { return route.abort('blockedbyclient'); }
   });
+  if (!allowPrivate) await ctx.routeWebSocket(/.*/, (ws) => ws.close()).catch(() => {});
   const page = await ctx.newPage();
   const jsErrors = [];
   page.on('pageerror', (e) => jsErrors.push(e.message.slice(0, 200)));

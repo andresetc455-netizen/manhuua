@@ -13,7 +13,7 @@ import Settings from './views/Settings.jsx';
 import { ExtensionHome, RemoteSeries } from './views/Extension.jsx';
 import { Updates, History, Browse, More } from './views/Feeds.jsx';
 import YouTubePanel from './views/YouTube.jsx';
-import { migrateSources } from './online.js';
+import { migrateSources, relinkSources } from './online.js';
 import Extensions, { StateDot } from './views/Extensions.jsx';
 import WorkView from './views/WorkView.jsx';
 
@@ -110,7 +110,14 @@ export default function App() {
   const [menu, setMenu] = useState(false);
   const [adding, setAdding] = useState(false);
   useTheme(s.theme);
-  useEffect(() => { detectProxy(); detectRender(); migrateSources().catch((e) => console.warn('migración de fuentes', e)); }, []);
+  useEffect(() => { detectProxy(); detectRender(); }, []);
+  // Biblioteca: fija la fuente de los datos anteriores y, cuando cambian las extensiones instaladas,
+  // recupera la asociación con las que se reinstalaron (misma identidad). No borra datos.
+  const installed = useExtensions();
+  const idsKey = installed.map((x) => x.id).sort().join(',');
+  useEffect(() => {
+    migrateSources().then(() => relinkSources(installed)).catch((e) => console.warn('biblioteca/fuentes', e));
+  }, [idsKey]); // eslint-disable-line
 
   const [view, a, b, c] = route;
   if (view === 'r') return <div className={'reader-wrap' + (s.ytOpen ? ' with-yt' : '')}><Reader key={a} chapterId={a} /><YouTubePanel /></div>;

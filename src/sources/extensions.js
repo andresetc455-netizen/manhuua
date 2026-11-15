@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { fetchVia, extract } from './web.js';
 import { loadDoc, explain, classify } from './engine.js';
-import { mBrowse, mDetail, mPages, validateManifest, fetchManifest, isManifest } from './manifest.js';
+import { mBrowse, mDetail, mPages, validateManifest, fetchManifest, isManifest, hostPolicy } from './manifest.js';
 import { itemsFromJson, embeddedJson } from './jsonwalk.js';
 import { chaptersFromJson, chaptersFromDoc, nextChaptersPage, nextJsonPage, metaFromJson, finalize } from './chapters.js';
 import { catalogSource } from './catalog.js';
@@ -15,6 +15,27 @@ function load() { try { return JSON.parse(localStorage.getItem(KEY)) || []; } ca
 function save(l) { list = l; try { localStorage.setItem(KEY, JSON.stringify(l)); } catch {} subs.forEach((f) => f(l)); }
 
 export const getExtension = (id) => list.find((e) => e.id === id);
+
+// ---- Identidad estable ----
+// Una extensión se identifica por su manifiesto (id del JSON) o, si es un sitio/API, por su URL
+// exacta (no por nombre ni dominio). Al eliminarla se recuerda su id local; si se reinstala la
+// misma identidad, recupera ese id y la biblioteca (obras, capítulos, progreso) vuelve a apuntarle.
+const GONE = 'manhuua.extensions.removed';
+const loadGone = () => { try { return JSON.parse(localStorage.getItem(GONE)) || {}; } catch { return {}; } };
+const saveGone = (g) => { try { const e = Object.entries(g).sort((a, b) => b[1].at - a[1].at).slice(0, 300); localStorage.setItem(GONE, JSON.stringify(Object.fromEntries(e))); } catch {} };
+export function identityOf(x) {
+  if (x.manifest?.id) return `manifest:${x.manifest.id}`;
+  try { const u = new URL(x.url); return `${x.type}:${u.protocol}//${u.host.toLowerCase()}${u.pathname.replace(/\/+$/, '')}${u.search}`; } catch { return `${x.type}:${x.url}`; }
+}
+/** Ids locales que tuvo una identidad (eliminadas antes), para recuperar la asociación. */
+export const formerIds = (identity) => Object.entries(loadGone()).filter(([, v]) => v.identity === identity).map(([id]) => id);
+export const removedInfo = (id) => loadGone()[id];
+function stableId(identity, preferred) {
+  const old = formerIds(identity).find((id) => !getExtension(id));
+  if (old) return old;
+  if (preferred && !getExtension(preferred) && !(loadGone()[preferred] && loadGone()[preferred].identity !== identity)) return preferred;
+  return Math.random().toString(36).slice(2, 9);
+}
 export const isEnabled = (x) => x.enabled !== false;
 /** Extensión dueña de una URL interna "mf:<id-del-manifiesto>/..." (sirve aunque se haya reinstalado). */
 export const extensionForUrl = (url = '', fallbackId) => getExtension(fallbackId) || (/^mf:/.test(url) ? list.find((e) => e.manifest?.id === url.slice(3).split('/')[0]) : undefined);
@@ -41,7 +62,7 @@ export function installManifest(manifest, manifestUrl) {
   const prev = list.find((e) => e.manifest?.id === manifest.id);
   const base = { type: 'manifest', manifest, manifestUrl: manifestUrl || prev?.manifestUrl || '', name: String(manifest.name).slice(0, 40), version: String(manifest.version), url: manifest.baseUrl, searchUrl: manifest.search ? 'manifest' : '', icon: manifest.icon || `${new URL(manifest.baseUrl).origin}/favicon.ico` };
   if (prev) { updateExtension(prev.id, { ...base, status: { state: 'available', at: Date.now() } }); return getExtension(prev.id); }
-  const ext = { id: Math.random().toString(36).slice(2, 9), ...base, enabled: true, addedAt: Date.now(), status: { state: 'available', at: Date.now() } };
+  const ext = { id: stableId(`manifest:${manifest.id}`, `mf-${manifest.id}`), ...base, enabled: true, addedAt: Date.now(), status: { state: 'available', at: Date.now() } };
   save([...list, ext]);
   return ext;
 }
@@ -75,12 +96,18 @@ export async function addExtension({ url, name, searchUrl, json }) {
       }
     } catch {}
   }
-  const ext = { id: Math.random().toString(36).slice(2, 9), type, url, name: (title || u.hostname).trim().slice(0, 40), searchUrl: searchUrl?.trim() || '', icon: `${u.origin}/favicon.ico`, addedAt: Date.now(), enabled: true, status: { state: 'available', at: Date.now() } };
+  const dup = list.find((x) => identityOf(x) === identityOf({ type, url }));
+  if (dup) return dup; // la misma extensión ya está instalada: no se duplica
+  const ext = { id: stableId(identityOf({ type, url })), type, url, name: (title || u.hostname).trim().slice(0, 40), searchUrl: searchUrl?.trim() || '', icon: `${u.origin}/favicon.ico`, addedAt: Date.now(), enabled: true, status: { state: 'available', at: Date.now() } };
   save([...list, ext]);
   return ext;
 }
 export const updateExtension = (id, patch) => save(list.map((e) => (e.id === id ? { ...e, ...patch } : e)));
-export const removeExtension = (id) => save(list.filter((e) => e.id !== id));
+export function removeExtension(id) {
+  const x = getExtension(id);
+  if (x) { const g = loadGone(); g[id] = { identity: identityOf(x), name: x.name, manifestId: x.manifest?.id, at: Date.now() }; saveGone(g); }
+  save(list.filter((e) => e.id !== id));
+}
 
 const IMG_ATTRS = ['data-src', 'data-lazy-src', 'data-original', 'data-cfsrc', 'data-lazy', 'data-url', 'data-bg', 'data-background', 'data-background-image', 'data-srcset', 'srcset', 'src'];
 const toAbs = (v, base) => { try { return new URL(v.trim(), base).href; } catch { return null; } };
@@ -301,4 +328,11 @@ export async function checkExtension(id) {
     } catch (e) { extra = { chapters: 0, chapterError: e.message }; }
   }
   return recordStatus(ext, r.diag, extra);
+}
+
+/** Política de dominios de la extensión dueña de un capítulo "mf:" (para imágenes por proxy). */
+export function chapterHosts(url, extId) {
+  if (!/^mf:/.test(url || '')) return undefined;
+  const ext = extensionForUrl(url, extId);
+  return ext?.manifest ? hostPolicy(ext.manifest) : undefined;
 }

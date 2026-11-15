@@ -12,7 +12,7 @@ import { getExtension } from '../sources/extensions.js';
  * Una página del lector. En capítulos en línea intenta primero la imagen directa (sin gastar el
  * backend); si falla, la pide por el proxy. Si tampoco carga, muestra un error con "Reintentar".
  */
-function PageImg({ src, i, online, referer, eager, className, onLoad, onError }) {
+function PageImg({ src, i, online, referer, hosts, eager, className, onLoad, onError }) {
   const [url, setUrl] = useState(src);
   const [stage, setStage] = useState(0); // 0 directa · 1 proxy · 2 error
   const [why, setWhy] = useState('');
@@ -21,8 +21,8 @@ function PageImg({ src, i, online, referer, eager, className, onLoad, onError })
   useEffect(() => { drop(); setUrl(src); setStage(0); setWhy(''); return drop; }, [src]);
   const fail = async () => {
     if (online && stage === 0) {
-      if (activeProxy()) { setStage(1); setUrl(proxied(src, referer)); return; }
-      try { const b = await fetchVia(src, 'blob', referer); drop(); blob.current = URL.createObjectURL(b); setStage(1); setUrl(blob.current); return; }
+      if (activeProxy()) { setStage(1); setUrl(proxied(src, referer, hosts)); return; }
+      try { const b = await fetchVia(src, 'blob', referer, undefined, { hosts }); drop(); blob.current = URL.createObjectURL(b); setStage(1); setUrl(blob.current); return; }
       catch (e) { setWhy(e.message); }
     }
     setStage(2); onError?.();
@@ -78,7 +78,7 @@ function TrOverlay({ data }) {
   );
 }
 
-function Vertical({ urls, start, gap, maxWidth, onPage, onTap, footer, jumpRef, tr, online, referer }) {
+function Vertical({ urls, start, gap, maxWidth, onPage, onTap, footer, jumpRef, tr, online, referer, hosts }) {
   const refs = useRef([]);
   const ready = useRef(start === 0);
   const loaded = useRef(0);
@@ -106,7 +106,7 @@ function Vertical({ urls, start, gap, maxWidth, onPage, onTap, footer, jumpRef, 
     <div className="vertical" style={{ '--gap': gap + 'px', '--mw': maxWidth ? maxWidth + 'px' : 'none' }} onClick={onTap}>
       {urls.map((u, i) => (
         <div key={i} ref={(el) => (refs.current[i] = el)} data-i={i} className="pgw">
-          <PageImg className="pg" src={u} i={i} online={online} referer={referer} eager={i <= start + 2} onLoad={settle(i, true)} onError={() => settle(i, false)()} />
+          <PageImg className="pg" src={u} i={i} online={online} referer={referer} hosts={hosts} eager={i <= start + 2} onLoad={settle(i, true)} onError={() => settle(i, false)()} />
           {tr?.[i]?.items && <TrOverlay data={tr[i]} />}
         </div>
       ))}
@@ -115,7 +115,7 @@ function Vertical({ urls, start, gap, maxWidth, onPage, onTap, footer, jumpRef, 
   );
 }
 
-function Paged({ urls, cur, setCur, dir, fit, onTap, onEnd, tr, online, referer }) {
+function Paged({ urls, cur, setCur, dir, fit, onTap, onEnd, tr, online, referer, hosts }) {
   const touch = useRef(null);
   const go = useCallback((d) => {
     const n = cur + d;
@@ -144,7 +144,7 @@ function Paged({ urls, cur, setCur, dir, fit, onTap, onEnd, tr, online, referer 
       onTouchStart={(e) => (touch.current = e.touches[0].clientX)}
       onTouchEnd={(e) => { const dx = e.changedTouches[0].clientX - touch.current; if (Math.abs(dx) > 60) go(flip(dx < 0 ? 1 : -1)); }}>
       <div className="pgw-paged">
-        <PageImg src={urls[cur]} i={cur} online={online} referer={referer} eager />
+        <PageImg src={urls[cur]} i={cur} online={online} referer={referer} hosts={hosts} eager />
         {tr?.[cur]?.items && <TrOverlay data={tr[cur]} />}
       </div>
       {urls[cur + 1] && <link rel="preload" as="image" href={urls[cur + 1]} />}
@@ -184,7 +184,7 @@ export default function Reader({ chapterId }) {
       const start = prog && !prog.done ? Math.min(prog.page, pages.urls.length - 1) : 0;
       setCur(start);
       setEnd(false);
-      setSt({ chapter, series, list, urls: pages.urls, start, online: !!pages.online, referer: pages.referer });
+      setSt({ chapter, series, list, urls: pages.urls, start, online: !!pages.online, referer: pages.referer, hosts: pages.hosts });
       saveProgress(chapter, start, pages.urls.length); // recuerda el último capítulo abierto al instante
       setTr({}); setTrMsg('');
       setTrOn(!!series?.translate);
@@ -217,7 +217,7 @@ export default function Reader({ chapterId }) {
         if (i < 0) break;
         setTrMsg(`Traduciendo ${k + 1}/${n}…`);
         // Páginas en línea: el OCR necesita leer la imagen, así que se pide por el proxy si hay uno.
-        const src = st.online && activeProxy() ? proxied(st.urls[i], st.referer) : st.urls[i];
+        const src = st.online && activeProxy() ? proxied(st.urls[i], st.referer, st.hosts) : st.urls[i];
         try { done[i] = await translatePage(st.chapter.id, i, src); }
         catch (e) { done[i] = { error: e.message }; if (/límite|limit|quota|fetch/i.test(e.message)) { setTrMsg('Error: ' + e.message); alive && setTr({ ...done }); return; } }
         if (alive) setTr({ ...done });
@@ -316,8 +316,8 @@ export default function Reader({ chapterId }) {
       </header>
 
       {s.mode === 'vertical'
-        ? <Vertical key={chapterId + ':' + reload} urls={st.urls} start={st.start} gap={s.gap} maxWidth={s.maxWidth} onPage={onPage} onTap={toggle} footer={endBox} jumpRef={jump} tr={trOn ? tr : null} online={st.online} referer={st.referer} />
-        : <Paged urls={st.urls} cur={cur} setCur={setCur} dir={s.dir} fit={s.fit} onTap={toggle} onEnd={() => { saveProgress(st.chapter, n - 1, n); setEnd(true); }} tr={trOn ? tr : null} online={st.online} referer={st.referer} />}
+        ? <Vertical key={chapterId + ':' + reload} urls={st.urls} start={st.start} gap={s.gap} maxWidth={s.maxWidth} onPage={onPage} onTap={toggle} footer={endBox} jumpRef={jump} tr={trOn ? tr : null} online={st.online} referer={st.referer} hosts={st.hosts} />
+        : <Paged urls={st.urls} cur={cur} setCur={setCur} dir={s.dir} fit={s.fit} onTap={toggle} onEnd={() => { saveProgress(st.chapter, n - 1, n); setEnd(true); }} tr={trOn ? tr : null} online={st.online} referer={st.referer} hosts={st.hosts} />}
 
       {trOn && trMsg && <div className="tr-status">{trMsg}</div>}
 

@@ -4,7 +4,7 @@ import { get, getAll, byIndex, write } from './db.js';
 import { uid } from './library.js';
 import { analyze, fetchVia } from './sources/web.js';
 import { setCover, needsCover } from './covers.js';
-import { chapterImages } from './sources/extensions.js';
+import { chapterImages, getExtension, identityOf, removedInfo } from './sources/extensions.js';
 
 // Clave de capítulo: URL sin barra final (se conserva el #fragmento: los catálogos JSON lo usan).
 export const normUrl = (u = '') => u.replace(/\/+(?=#|$)/, '');
@@ -31,7 +31,8 @@ export async function followSeries(ext, sourceUrl, detail, { seriesId } = {}) {
     ? { ...prev, ...(primary ? meta : Object.fromEntries(Object.entries(meta).filter(([k]) => prev[k] == null))), online: prev.online ?? true }
     : { id: uid(), title: (detail.title || 'Sin título').trim(), favorite: false, addedAt: Date.now(), source: 'local', online: true, ...meta };
   const srcEntry = { extId: ext.id, extName: ext.name, url: sourceUrl, chapterCount: detail.chapters?.length ?? 0, state: 'ok', lastCheck: Date.now() };
-  const sources = [...seriesSources(base).filter((x) => !(x.extId === ext.id && x.url === sourceUrl)), srcEntry];
+  // Una fuente por URL: si había una entrada de una extensión ya eliminada con la misma URL, se reemplaza.
+  const sources = [...seriesSources(base).filter((x) => !(x.url === sourceUrl && (x.extId === ext.id || !getExtension(x.extId)))), srcEntry];
   const alts = [...new Set([...(base.altTitles || []), ...(detail.altTitles || []), ...(detail.title && detail.title !== base.title ? [detail.title] : [])])].slice(0, 30);
   const series = { ...base, sources, altTitles: alts, ids: { ...(detail.ids || {}), ...(base.ids || {}) }, activeSource: base.activeSource || ext.id };
   const existing = prev ? await byIndex('chapters', 'seriesId', prev.id) : [];
@@ -78,16 +79,28 @@ export async function migrateSources(seriesId) {
   const series = seriesId ? [await get('series', seriesId)].filter(Boolean) : await getAll('series');
   let n = 0;
   for (const s of series) {
-    const chs = await byIndex('chapters', 'seriesId', s.id);
-    const src = new Map(chs.map((c) => [c.id, c.sourceId || sourceKey(c, s)]));
-    const fixCh = chs.filter((c) => !c.sourceId);
-    const fixPr = (await byIndex('progress', 'seriesId', s.id)).filter((p) => !p.sourceId && src.has(p.chapterId));
-    if (!fixCh.length && !fixPr.length) continue;
+    // Lectura y escritura dentro de la MISMA transacción (cursor): si otra parte de la app guarda
+    // el capítulo (por ejemplo, el lector abierto directamente), IndexedDB ordena las transacciones
+    // y la migración nunca escribe una copia vieja; solo agrega sourceId a lo que no lo tiene.
+    const src = new Map();
     await write(['chapters', 'progress'], (o) => {
-      fixCh.forEach((c) => o.chapters.put({ ...c, sourceId: src.get(c.id) }));
-      fixPr.forEach((p) => o.progress.put({ ...p, sourceId: src.get(p.chapterId) }));
+      o.chapters.index('seriesId').openCursor(IDBKeyRange.only(s.id)).onsuccess = (e) => {
+        const cur = e.target.result;
+        if (!cur) {
+          o.progress.index('seriesId').openCursor(IDBKeyRange.only(s.id)).onsuccess = (ev) => {
+            const pc = ev.target.result; if (!pc) return;
+            if (!pc.value.sourceId && src.has(pc.value.chapterId)) pc.update({ ...pc.value, sourceId: src.get(pc.value.chapterId) });
+            pc.continue();
+          };
+          return;
+        }
+        const c = cur.value;
+        const sid = c.sourceId || sourceKey(c, s);
+        src.set(c.id, sid);
+        if (!c.sourceId) { cur.update({ ...c, sourceId: sid }); n++; }
+        cur.continue();
+      };
     });
-    n += fixCh.length;
   }
   return n;
 }
@@ -107,6 +120,61 @@ export function equivalent(ch, list, s, target) {
     return near ? { chapter: near, exact: false, reason: `no hay capítulo ${ch.number}; el más cercano es ${near.title}` } : { chapter: pool[0], exact: false, reason: 'los capítulos de esa fuente no tienen número' };
   }
   return { chapter: pool[0], exact: false, reason: 'este capítulo no tiene número para compararlo' };
+}
+
+/**
+ * Recupera la asociación de la biblioteca con extensiones reinstaladas que tienen otro id local
+ * (datos anteriores a la identidad estable). Solo con evidencia exacta: misma identidad registrada
+ * al eliminarla, o capítulos/obras "mf:<id-del-manifiesto>/" de esa misma extensión JSON. Nunca por
+ * nombre ni por dominio. Además une entradas de fuente duplicadas (misma URL). No borra datos.
+ * Devuelve {series, chapters, progress} actualizados.
+ */
+export async function relinkSources(installed) {
+  const byIdentity = new Map(installed.map((x) => [identityOf(x), x.id]));
+  const byManifest = new Map(installed.filter((x) => x.manifest?.id).map((x) => [x.manifest.id, x.id]));
+  const live = new Set(installed.map((x) => x.id));
+  const target = (oldId, url) => {
+    if (!oldId || live.has(oldId) || oldId === 'local') return null;
+    const gone = removedInfo(oldId);
+    if (gone?.identity && byIdentity.has(gone.identity)) return byIdentity.get(gone.identity);
+    const mf = /^mf:([^/]+)\//.exec(url || '');
+    if (mf && byManifest.has(mf[1]) && (!gone || gone.manifestId === mf[1])) return byManifest.get(mf[1]);
+    return null;
+  };
+  const stats = { series: 0, chapters: 0, progress: 0 };
+  for (const s of await getAll('series')) {
+    const map = new Map();
+    for (const x of seriesSources(s)) { const t = target(x.extId, x.url); if (t) map.set(x.extId, t); }
+    const t0 = target(s.extId, s.sourceUrl); if (t0) map.set(s.extId, t0);
+    const srcs = seriesSources(s).map((x) => (map.has(x.extId) ? { ...x, extId: map.get(x.extId), extName: getExtension(map.get(x.extId))?.name || x.extName } : x));
+    const dedup = [];
+    for (const x of srcs) { const i = dedup.findIndex((y) => y.url === x.url && (y.extId === x.extId || !live.has(y.extId) || !live.has(x.extId))); if (i < 0) dedup.push(x); else dedup[i] = live.has(x.extId) ? { ...dedup[i], ...x } : { ...x, ...dedup[i] }; }
+    const changedSeries = map.size || dedup.length !== seriesSources(s).length;
+    // Capítulos y progreso: se reasigna solo el id viejo → nuevo de la MISMA extensión, en la misma transacción.
+    const chMap = new Map(map);
+    const chs = await byIndex('chapters', 'seriesId', s.id);
+    for (const c of chs) if (c.sourceId && !chMap.has(c.sourceId)) { const t = target(c.sourceId, c.url); if (t) chMap.set(c.sourceId, t); }
+    if (!changedSeries && !chMap.size) continue;
+    await write(['series', 'chapters', 'progress'], (o) => {
+      o.series.get(s.id).onsuccess = (e) => {
+        const cur = e.target.result; if (!cur || !changedSeries) return;
+        o.series.put({ ...cur, sources: dedup, ...(map.has(cur.extId) ? { extId: map.get(cur.extId), extName: getExtension(map.get(cur.extId))?.name || cur.extName } : {}), ...(map.has(cur.activeSource) ? { activeSource: map.get(cur.activeSource) } : {}) });
+        stats.series++;
+      };
+      if (!chMap.size) return;
+      o.chapters.index('seriesId').openCursor(IDBKeyRange.only(s.id)).onsuccess = (e) => {
+        const cur = e.target.result; if (!cur) return;
+        if (chMap.has(cur.value.sourceId)) { cur.update({ ...cur.value, sourceId: chMap.get(cur.value.sourceId) }); stats.chapters++; }
+        cur.continue();
+      };
+      o.progress.index('seriesId').openCursor(IDBKeyRange.only(s.id)).onsuccess = (e) => {
+        const cur = e.target.result; if (!cur) return;
+        if (chMap.has(cur.value.sourceId)) { cur.update({ ...cur.value, sourceId: chMap.get(cur.value.sourceId) }); stats.progress++; }
+        cur.continue();
+      };
+    });
+  }
+  return stats;
 }
 
 /** URLs de las imágenes de un capítulo en línea (las pide a la página de origen si hace falta). */

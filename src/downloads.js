@@ -5,7 +5,7 @@ import { ensureSeries, saveChapter, updateSeries } from './library.js';
 import { setCover, autoCover, needsCover } from './covers.js';
 import { loadSettings } from './settings.js';
 import { get, byIndex, getAll } from './db.js';
-import { getExtension, seriesDetail, chapterImages, isEnabled } from './sources/extensions.js';
+import { getExtension, seriesDetail, chapterImages, chapterHosts, isEnabled } from './sources/extensions.js';
 import { followSeries, seriesSources } from './online.js';
 
 const jobs = [];
@@ -73,13 +73,14 @@ async function process(job) {
     if (info.kind !== 'chapter') throw new Error('No se encontraron páginas en la URL');
     images = info.images; title ??= info.title; number ??= info.number;
   }
+  const hosts = chapterHosts(job.url, job.extId); // extensiones JSON: imágenes solo de sus dominios
   set({ status: 'descargando', total: images.length, done: 0 });
   let n = 0;
   const blobs = await pool(images, 4, async (u) => {
     let b = null;
     for (let t = 0; t < 3 && !b; t++) {
-      try { b = await fetchVia(u, 'blob', httpRef(job.url)); }
-      catch (e) { if (t === 2 || [401, 403, 404, 410, 451].includes(e.status)) { console.warn(u, e.message); break; } } // sin reintentos si la fuente lo rechaza
+      try { b = await fetchVia(u, 'blob', httpRef(job.url), undefined, { hosts }); }
+      catch (e) { if (t === 2 || e.policy || [401, 403, 404, 410, 451].includes(e.status)) { console.warn(u, e.message); break; } } // sin reintentos si la fuente lo rechaza
     }
     set({ done: ++n });
     return b;
