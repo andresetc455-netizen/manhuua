@@ -2,7 +2,7 @@
 // CORS, no permite hotlinking y exige un proxy con User-Agent real. El backend limita el ritmo,
 // cachea y valida MangaDex@Home; acá se limita la concurrencia, se unen pedidos iguales, se respeta
 // el 429 (Retry-After) y se normalizan los datos sin inventar nada. Ver docs/MANGADEX.md.
-import { activeProxy } from './web.js';
+import { activeProxy, detectProxy } from './web.js';
 import { officialLinks } from './platforms.js';
 
 export const MD_ID = 'native-mangadex';
@@ -48,7 +48,11 @@ const abortErr = () => Object.assign(new Error('Cancelado'), { name: 'AbortError
 
 /** Una llamada al backend. as: 'json' | 'blob'. Registra el intento en `trace` (diagnóstico). */
 export async function mdCall(route, params = {}, { as = 'json', ttl = 0, signal, trace, service = 'mangadex' } = {}) {
-  const base = mdBackend(), name = LABEL[service] || service, via = `backend ${name}`;
+  let base = mdBackend();
+  // Sin VITE_BACKEND_URL ni proxy en Ajustes, el servidor incluido (npm run serve) se detecta con una petición:
+  // se espera esa detección antes de concluir que no hay backend (nunca un error por pedir demasiado pronto).
+  if (!base) { await detectProxy(); base = mdBackend(); }
+  const name = LABEL[service] || service, via = `backend ${name}`;
   const noBk = service === 'mangadex' ? NO_BACKEND : NO_BACKEND.replace(/MangaDex/g, name);
   if (!base) { trace?.push({ via, ok: false, error: noBk, source: 'backend' }); throw Object.assign(new Error(noBk), { source: 'backend', noBackend: true }); }
   const qs = new URLSearchParams(Object.entries(params).flatMap(([k, v]) => (Array.isArray(v) ? v.map((x) => [k, x]) : v == null || v === '' ? [] : [[k, String(v)]])));

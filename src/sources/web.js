@@ -8,15 +8,25 @@ import { BACKEND, wakeBackend } from '../backend.js';
 import { mdFetch } from './mangadex.js';
 import { muFetch } from './mangaupdates.js';
 
-let autoProxy = '';
-/** Detecta el proxy del servidor incluido (server/proxy.mjs) si la app se sirve desde él. */
-export async function detectProxy() {
-  if (BACKEND) { autoProxy = `${BACKEND}/proxy?url=`; wakeBackend(); return autoProxy; }
-  try {
-    const r = await fetch('./proxy?url=', { cache: 'no-store' });
-    if (r.status === 400 && (await r.text()).includes('manhuua-proxy')) autoProxy = './proxy?url=';
-  } catch {}
-  return autoProxy;
+// Con VITE_BACKEND_URL el proxy propio se conoce al compilar: queda fijo al cargar el módulo, antes de que
+// cualquier vista pida datos. Así abrir una ficha por URL o recargarla no depende del orden de los efectos
+// de React (los de las vistas hijas corren antes que el de App.jsx).
+let autoProxy = BACKEND ? `${BACKEND}/proxy?url=` : '';
+let detecting = null;
+/**
+ * Detecta el proxy del servidor incluido (server/proxy.mjs) si la app se sirve desde él. Una sola detección
+ * a la vez: quien llame mientras está en curso recibe la misma promesa. Si no encuentra el servidor, la
+ * próxima llamada vuelve a intentar.
+ */
+export function detectProxy() {
+  if (BACKEND) { wakeBackend(); return Promise.resolve(autoProxy); }
+  return (detecting ??= (async () => {
+    try {
+      const r = await fetch('./proxy?url=', { cache: 'no-store' });
+      if (r.status === 400 && (await r.text()).includes('manhuua-proxy')) autoProxy = './proxy?url=';
+    } catch {}
+    return autoProxy;
+  })().finally(() => { if (!autoProxy) detecting = null; }));
 }
 export const activeProxy = () => loadSettings().proxy?.trim() || autoProxy;
 
