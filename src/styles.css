@@ -388,3 +388,28 @@ input[type=range] { accent-color: var(--accent); width: 100%; }
 .link-btn { background: none; border: 0; padding: 0 0 0 6px; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
 .link-btn:disabled { color: var(--muted); cursor: default; text-decoration: none; }
 
+/* Lector de novelas */
+.novel-reader { --nbg: #141418; --ntx: #e6e4ea; --nmu: #9a98a6; --nbd: #2a2a33; position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--nbg); color: var(--ntx); }
+.novel-reader.nt-light { --nbg: #fbfaf7; --ntx: #1c1b1f; --nmu: #6d6872; --nbd: #e2ddd6; }
+.novel-reader.nt-sepia { --nbg: #f4ecd8; --ntx: #3b2f22; --nmu: #7a6a55; --nbd: #e0d3b5; }
+.novel-reader .muted { color: var(--nmu); }
+.novel-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--nbd); }
+.novel-bar .icon-btn { color: inherit; }
+.novel-title { display: flex; flex-direction: column; min-width: 0; }
+.novel-title > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.novel-panel { border-bottom: 1px solid var(--nbd); max-height: 50vh; overflow: auto; padding: 8px 16px; }
+.novel-panel ol { margin: 0; padding-left: 22px; }
+.novel-panel li { padding: 4px 0; }
+.novel-panel li.on a { font-weight: 700; color: var(--accent); }
+.novel-panel a { color: inherit; }
+.novel-opts { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.novel-opts label { display: flex; align-items: center; gap: 8px; }
+.novel-opts input[type=range] { flex: 1; }
+.novel-body { flex: 1; overflow-y: auto; padding: 24px 16px 48px; }
+.novel-col { max-width: var(--nw); margin: 0 auto; }
+.novel-col p { margin: 0 0 1em; text-align: justify; hyphens: auto; overflow-wrap: anywhere; }
+.novel-col h2 { font-size: 1.3em; margin: 1.2em 0 .8em; }
+.novel-nav { display: flex; justify-content: space-between; gap: 12px; margin-top: 32px; }
+.novel-opts select { background: transparent; color: inherit; border: 1px solid var(--nbd); border-radius: 8px; padding: 6px 8px; }
+.novel-opts select option { color: #1c1b1f; }
+.novel-bar .icon-btn:hover, .novel-bar .icon-btn:focus-visible { background: color-mix(in srgb, var(--ntx) 12%, transparent); }

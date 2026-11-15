@@ -8,6 +8,8 @@ import { Icon, Favicon, Sheet, go } from './ui.jsx';
 import Library from './views/Library.jsx';
 import SeriesView from './views/SeriesView.jsx';
 import Reader from './views/Reader.jsx';
+import NovelReader from './views/NovelReader.jsx';
+import { get } from './db.js';
 import Downloads from './views/Downloads.jsx';
 import Settings from './views/Settings.jsx';
 import { ExtensionHome, RemoteSeries } from './views/Extension.jsx';
@@ -104,6 +106,15 @@ function Sidebar({ route, open, onClose, onAdd }) {
   );
 }
 
+// Elige el lector según el tipo de capítulo: texto (novela importada) o imágenes.
+function ChapterRoute({ id, yt }) {
+  const [kind, setKind] = useState(null);
+  useEffect(() => { get('chapters', id).then((c) => setKind(c?.kind || 'img'), () => setKind('img')); }, [id]);
+  if (!kind) return null;
+  if (kind === 'text') return <NovelReader chapterId={id} />;
+  return <div className={'reader-wrap' + (yt ? ' with-yt' : '')}><Reader chapterId={id} /><YouTubePanel /></div>;
+}
+
 export default function App() {
   const route = useRoute();
   const [s] = useSettings();
@@ -120,7 +131,7 @@ export default function App() {
   }, [idsKey]); // eslint-disable-line
 
   const [view, a, b, c] = route;
-  if (view === 'r') return <div className={'reader-wrap' + (s.ytOpen ? ' with-yt' : '')}><Reader key={a} chapterId={a} /><YouTubePanel /></div>;
+  if (view === 'r') return <ChapterRoute key={a} id={a} yt={s.ytOpen} />;
 
   let page;
   if (view === 's') page = <SeriesView key={a} id={a} />;

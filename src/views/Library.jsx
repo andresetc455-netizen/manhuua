@@ -13,7 +13,7 @@ function ImportSheet({ chapters, onClose }) {
   const [groups, setGroups] = useState(() => {
     const m = new Map();
     chapters.forEach((c) => m.set(c.series, [...(m.get(c.series) || []), c]));
-    return [...m].map(([series, chs]) => ({ series, chapters: chs }));
+    return [...m].map(([series, chs]) => ({ series, chapters: chs, kind: chs[0].kind, author: chs[0].author }));
   });
   const [busy, setBusy] = useState(false);
   const save = async () => {
@@ -28,11 +28,11 @@ function ImportSheet({ chapters, onClose }) {
     <Sheet title="Importar" onClose={onClose}>
       <div className="form">
         {groups.map((g, i) => (
-          <label key={i}>Serie ({g.chapters.length} cap. · {g.chapters.reduce((n, c) => n + c.pages.length, 0)} págs.)
+          <label key={i}>Serie ({g.chapters.length} cap. · {g.kind === 'text' ? 'novela' : `${g.chapters.reduce((n, c) => n + c.pages.length, 0)} págs.`})
             <input value={g.series} onChange={(e) => setGroups(groups.map((x, k) => (k === i ? { ...x, series: e.target.value } : x)))} />
           </label>
         ))}
-        {!groups.length && <p className="hint">No se encontraron imágenes.</p>}
+        {!groups.length && <p className="hint">No se encontraron imágenes ni novelas (TXT/EPUB).</p>}
         <button className="btn primary" disabled={busy || !groups.length} onClick={save}>{busy ? 'Guardando…' : 'Guardar en la biblioteca'}</button>
       </div>
     </Sheet>
@@ -95,7 +95,7 @@ export default function Library() {
           <button className="icon-btn" title="Importar carpeta" onClick={() => dirRef.current.click()}><Icon n="folder" /></button>
           <button className="btn primary sm" onClick={() => fileRef.current.click()}><Icon n="plus" size={16} /><span className="hide-sm"> Importar</span></button>
         </div>
-        <input ref={fileRef} type="file" hidden multiple accept=".cbz,.zip,image/*" onChange={onFiles} />
+        <input ref={fileRef} type="file" hidden multiple accept=".cbz,.zip,.epub,.txt,image/*" onChange={onFiles} />
         <input ref={dirRef} type="file" hidden multiple webkitdirectory="" onChange={onFiles} />
       </header>
       {msg && <div className="toast">{msg}</div>}
@@ -137,7 +137,7 @@ export default function Library() {
       {data && !data.length ? (
         <div className="empty">
           <h2>Tu biblioteca está vacía</h2>
-          <p>Importá capítulos en CBZ/ZIP o carpetas de imágenes, pegá una URL en <a href="#/downloads">Descargas</a>, o agregá una extensión desde el menú.</p>
+          <p>Importá capítulos en CBZ/ZIP, carpetas de imágenes o novelas propias en TXT/EPUB sin DRM, pegá una URL en <a href="#/downloads">Descargas</a>, o agregá una extensión desde el menú.</p>
           <div className="row">
             <button className="btn primary" onClick={() => fileRef.current.click()}>Importar archivos</button>
             <button className="btn" onClick={() => loadDemo()}>Cargar demo</button>

@@ -29,7 +29,7 @@ export async function ensureSeries(title, extra = {}) {
 }
 
 /** Guarda un capítulo con sus páginas (Blobs) en una serie. */
-export async function saveChapter(series, { title, number, pages, url, sourceId }, { firstPageCover = true } = {}) {
+export async function saveChapter(series, { title, number, pages, url, sourceId, kind }, { firstPageCover = true } = {}) {
   if (!pages.length) throw new Error('El capítulo no tiene imágenes');
   // Si el capítulo ya estaba "en línea" (sin descargar), se completa ese mismo registro: conserva
   // su id, el progreso de lectura y su lugar en la lista.
@@ -38,8 +38,8 @@ export async function saveChapter(series, { title, number, pages, url, sourceId 
   // La procedencia queda fija desde que se guarda: la del capítulo en línea, la indicada por la
   // descarga o, si no hay, la fuente principal de la obra (o "local" para importados).
   const src = stub?.sourceId || sourceId || (url && latest.extId) || 'local';
-  const ch = { ...(stub || {}), id: stub?.id || uid(), seriesId: series.id, title: title || stub?.title || `Capítulo ${number ?? ''}`.trim(), number: number ?? stub?.number ?? null, pageCount: pages.length, addedAt: stub?.addedAt || Date.now(), url, online: false, remotePages: null, sourceId: src };
-  const cover = latest.cover || !firstPageCover ? null : await thumbnail(pages[0]);
+  const ch = { ...(stub || {}), id: stub?.id || uid(), seriesId: series.id, title: title || stub?.title || `Capítulo ${number ?? ''}`.trim(), number: number ?? stub?.number ?? null, pageCount: pages.length, addedAt: stub?.addedAt || Date.now(), url, online: false, remotePages: null, sourceId: src, ...(kind ? { kind } : {}) };
+  const cover = latest.cover || !firstPageCover || kind === 'text' ? null : await thumbnail(pages[0]);
   await write(['chapters', 'pages', 'series'], (o) => {
     o.chapters.put(ch);
     pages.forEach((p, i) => o.pages.put(p, [ch.id, i]));
@@ -53,7 +53,7 @@ export async function saveChapter(series, { title, number, pages, url, sourceId 
 export async function importGroups(groups) {
   const out = [];
   for (const g of groups) {
-    const s = await ensureSeries(g.series);
+    const s = await ensureSeries(g.series, g.kind ? { kind: g.kind, ...(g.author ? { author: g.author } : {}) } : {});
     for (const c of g.chapters) await saveChapter(s, c);
     out.push(s);
   }

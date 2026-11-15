@@ -100,7 +100,7 @@ export function History() {
                 <a href={`#/s/${h.s.id}`} className="feed-cover"><Cover src={h.s.cover} title={h.s.title} /></a>
                 <a href={`#/s/${h.s.id}`} className="feed-txt">
                   <b>{h.s.title}</b>
-                  <span className="muted small">{h.c.title}{h.done ? ' · leído' : ` · pág. ${h.page + 1}/${h.total}`} · {time(h.updatedAt)}</span>
+                  <span className="muted small">{h.c.title}{h.done ? ' · leído' : h.c.kind === 'text' ? ` · ${Math.round(((h.page + 1) / h.total) * 100)}%` : ` · pág. ${h.page + 1}/${h.total}`} · {time(h.updatedAt)}</span>
                 </a>
                 <button className="icon-btn accent" title="Continuar" onClick={() => go(`/r/${h.c.id}`)}><Icon n="play" fill /></button>
               </li>
