@@ -101,7 +101,8 @@ export function groupWorks(entries, ov = overrides) {
     }
     out.push({
       key: src.map((s) => s.key).sort()[0], title, altTitles: alts.slice(0, 20), cover: pick('cover'), coverExt: src.find((s) => s.item.cover)?.ext, description: longest('description'),
-      author: pick('author'), artist: pick('artist'), status: pick('status'), genres: [...new Set(src.flatMap((s) => s.item.genres || []))],
+      author: pick('author'), artist: pick('artist'), status: pick('status'), type: pick('type'), rating: pick('rating'), year: pick('year'),
+      languages: [...new Set(src.flatMap((s) => s.item.languages || []))], genres: [...new Set(src.flatMap((s) => s.item.genres || []))],
       updatedAt: src.map((s) => s.item.updatedAt).filter(Boolean).sort().at(-1), sources: src, maybe,
     });
   }

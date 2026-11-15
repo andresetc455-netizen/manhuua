@@ -1,5 +1,5 @@
 // Novedades, Historial, Explorar y Más (estructura tipo lector de manga con pestañas).
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDb, getAll } from '../db.js';
 import { checkAllUpdates } from '../downloads.js';
 import { useExtensions, isEnabled, extHosts } from '../sources/extensions.js';
@@ -129,11 +129,14 @@ export function Browse({ onAdd }) {
   const [q, setQ] = useState(saved?.q || '');
   const [res, setRes] = useState(saved?.res || null); // [{extId, state, items, label, reason}]
   const [mode, setMode] = useState(saved?.mode || '');
-  const [f, setF] = useState({ genre: '', status: '', source: '', sort: 'rel' });
+  const F0 = { genre: '', status: '', source: '', sort: 'rel', type: '', lang: '', author: '' };
+  const [f, setF] = useState(F0);
+  const ctl = useRef(null);
   const [, bump] = useState(0);
   useEffect(() => onMergesChange(() => bump((n) => n + 1)), []);
   useEffect(() => { if (res && !res.some((r) => r.state === 'loading')) ssSet(SS, { q, res, mode }); }, [res]); // eslint-disable-line
-  const run = (query) => { setMode(query ? 'search' : 'catalog'); setF({ genre: '', status: '', source: '', sort: 'rel' }); searchAll(exts, query, setRes); };
+  const run = (query) => { ctl.current?.abort(); ctl.current = new AbortController(); setMode(query ? 'search' : 'catalog'); setF(F0); searchAll(exts, query, setRes, { signal: ctl.current.signal }); };
+  useEffect(() => () => ctl.current?.abort(), []);
   const search = (e) => { e.preventDefault(); if (!q.trim()) { setRes(null); sessionStorage.removeItem(SS); return; } run(q.trim()); };
   const extById = (id) => all.find((x) => x.id === id);
 
@@ -144,7 +147,11 @@ export function Browse({ onAdd }) {
   }, [res, all, getMerges()]); // eslint-disable-line
   const genres = [...new Set(groups.flatMap((g) => g.genres))].sort((a, b) => a.localeCompare(b));
   const statuses = [...new Set(groups.map((g) => g.status).filter(Boolean))];
-  let shown = groups.filter((g) => (!f.genre || g.genres.includes(f.genre)) && (!f.status || g.status === f.status) && (!f.source || g.sources.some((s) => s.ext.id === f.source)));
+  const types = [...new Set(groups.map((g) => g.type).filter(Boolean))];
+  const langs = [...new Set(groups.flatMap((g) => g.languages || []))].sort();
+  const au = f.author.trim().toLowerCase();
+  let shown = groups.filter((g) => (!f.genre || g.genres.includes(f.genre)) && (!f.status || g.status === f.status) && (!f.source || g.sources.some((s) => s.ext.id === f.source))
+    && (!f.type || g.type === f.type) && (!f.lang || g.languages?.includes(f.lang)) && (!au || `${g.author || ''} ${g.artist || ''}`.toLowerCase().includes(au)));
   if (f.sort === 'az') shown = [...shown].sort((a, b) => a.title.localeCompare(b.title, 'es'));
   if (f.sort === 'upd') shown = [...shown].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
   const loading = res?.some((r) => r.state === 'loading');
@@ -174,6 +181,9 @@ export function Browse({ onAdd }) {
               <select value={f.genre} onChange={(e) => setF({ ...f, genre: e.target.value })} aria-label="Género"><option value="">Todos los géneros</option>{genres.map((g) => <option key={g}>{g}</option>)}</select>
               <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} aria-label="Estado"><option value="">Cualquier estado</option>{statuses.map((g) => <option key={g}>{g}</option>)}</select>
               <select value={f.source} onChange={(e) => setF({ ...f, source: e.target.value })} aria-label="Fuente"><option value="">Todas las fuentes</option>{res.filter((r) => r.items.length).map((r) => <option key={r.extId} value={r.extId}>{extById(r.extId)?.name}</option>)}</select>
+              {types.length > 0 && <select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} aria-label="Tipo"><option value="">Manga, manhwa y manhua</option>{types.map((t) => <option key={t} value={t}>{t[0].toUpperCase() + t.slice(1)}</option>)}</select>}
+              {langs.length > 0 && <select value={f.lang} onChange={(e) => setF({ ...f, lang: e.target.value })} aria-label="Idioma"><option value="">Cualquier idioma</option>{langs.map((l) => <option key={l} value={l}>{l}</option>)}</select>}
+              <input className="f-author" value={f.author} onChange={(e) => setF({ ...f, author: e.target.value })} placeholder="Autor" aria-label="Autor" />
               <select value={f.sort} onChange={(e) => setF({ ...f, sort: e.target.value })} aria-label="Orden"><option value="rel">Orden de las fuentes</option><option value="az">Alfabético</option><option value="upd">Últimas actualizaciones</option></select>
               <span className="muted small">{shown.length} {shown.length === 1 ? 'obra' : 'obras'}{groups.length !== shown.length ? ` de ${groups.length}` : ''}</span>
             </div>
@@ -183,6 +193,7 @@ export function Browse({ onAdd }) {
               <a key={w.key} className="card" href={`#/w/${encodeURIComponent(w.key)}`} onClick={(e) => { e.preventDefault(); openWork(w); }}>
                 <Cover src={w.cover} title={w.title} referer={(w.coverExt || w.sources[0].ext).url} hosts={extHosts(w.coverExt || w.sources[0].ext)}>
                   {w.sources.length > 1 && <span className="kind src-count">{w.sources.length} fuentes</span>}
+                  {w.rating && w.rating !== 'Apto' && <span className="kind rating">{w.rating}</span>}
                 </Cover>
                 <span className="card-title">{w.title}</span>
                 <span className="muted small card-sub">{[w.status, w.sources.map((s) => s.ext.name).join(', ')].filter(Boolean).join(' · ')}{w.maybe.length ? ' · posible duplicado' : ''}</span>
