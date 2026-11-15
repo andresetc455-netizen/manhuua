@@ -1,6 +1,7 @@
 // Servidor de Manhuua: proxy CORS (/proxy?url=&referer=), renderizador (/render?url=&kind=),
 // estado (/health) y, si existe dist/, la app compilada.
 // MangaDex nativo: /mangadex/{api,chapter,page,cover,status} (server/mangadex.mjs).
+// MangaUpdates (solo metadatos): /mangaupdates/{search,series,cover,status} (server/mangaupdates.mjs).
 // Local:  npm run serve  (PORT=8787). Producción (Render): ver Dockerfile y DEPLOY.md.
 // Configuración por variables de entorno: ver server/security.mjs (loadConfig) y .env.example.
 import http from 'node:http';
@@ -11,6 +12,7 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { render, renderAvailable, closeBrowser } from './render.mjs';
 import { createMangadex, mdConfig } from './mangadex.mjs';
+import { createMangaupdates, muConfig } from './mangaupdates.mjs';
 import { loadConfig, originAllowed, assertPublicUrl, rateLimiter, clientIp, readLimited, limiter, safeRequest, parseHostPolicy, hostAllowed } from './security.mjs';
 
 const C = loadConfig();
@@ -18,10 +20,11 @@ const DIST = path.resolve(import.meta.dirname, '../dist');
 const STATIC = C.serveStatic && existsSync(DIST);
 const UA = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36';
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon' };
-const limits = { proxy: rateLimiter(C.proxyPerMin), render: rateLimiter(C.renderPerMin), mangadex: rateLimiter(C.proxyPerMin) };
+const limits = { proxy: rateLimiter(C.proxyPerMin), render: rateLimiter(C.renderPerMin), mangadex: rateLimiter(C.proxyPerMin), mangaupdates: rateLimiter(C.proxyPerMin) };
 const renderSlot = limiter(C.renderConcurrency, C.renderQueue);
 const proxySlot = limiter(C.proxyConcurrency, C.proxyQueue);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
+const MU = createMangaupdates({ cfg: muConfig(process.env, { allowPrivate: C.allowPrivate }), allowPrivate: C.allowPrivate, timeoutMs: C.fetchTimeoutMs, log });
 const MD = createMangadex({ cfg: mdConfig(process.env, { allowPrivate: C.allowPrivate }), allowPrivate: C.allowPrivate, timeoutMs: C.fetchTimeoutMs, log });
 
 function corsHeaders(req) {
@@ -124,7 +127,7 @@ async function serveStatic(u, res) {
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
   const cors = corsHeaders(req);
-  const api = /\/mangadex\/[a-z]+$/.test(u.pathname) ? 'mangadex' : u.pathname.endsWith('/proxy') ? 'proxy' : u.pathname.endsWith('/render') ? 'render' : u.pathname.endsWith('/health') ? 'health' : null;
+  const api = /\/mangadex\/[a-z]+$/.test(u.pathname) ? 'mangadex' : /\/mangaupdates\/[a-z]+$/.test(u.pathname) ? 'mangaupdates' : u.pathname.endsWith('/proxy') ? 'proxy' : u.pathname.endsWith('/render') ? 'render' : u.pathname.endsWith('/health') ? 'health' : null;
   try {
     if (req.method === 'OPTIONS') return send(res, 204, { ...cors, 'access-control-allow-methods': 'GET, OPTIONS', 'access-control-allow-headers': '*', 'access-control-max-age': '86400' });
     // Origen no permitido: se responde legible para que la app explique qué configurar (no expone datos).
@@ -135,6 +138,7 @@ const server = http.createServer(async (req, res) => {
       const rl = limits[api](clientIp(req, C.trustProxy));
       if (!rl.ok) return sendJson(res, 429, cors, { error: 'Demasiadas peticiones, esperá un momento' }, { 'retry-after': String(rl.retryAfter), 'x-manhuua-error': '1' });
       if (api === 'mangadex') return await MD.handle(req, u, res, cors, send);
+      if (api === 'mangaupdates') return await MU.handle(req, u, res, cors, send);
       return api === 'proxy' ? await proxy(req, u, res, cors) : await renderRoute(req, u, res, cors);
     }
     if (STATIC) return await serveStatic(u, res);

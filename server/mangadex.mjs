@@ -127,7 +127,7 @@ export function pacer({ perSec, concurrency, maxQueue }) {
   };
 }
 /** Caché con vencimiento, máximo de entradas y (opcional) de bytes en total (portadas). */
-function ttlCache(max, maxBytes = Infinity, sizeOf = () => 0) {
+export function ttlCache(max, maxBytes = Infinity, sizeOf = () => 0) {
   const m = new Map(); let bytes = 0;
   const drop = (k) => { const e = m.get(k); if (e) { bytes -= e.n; m.delete(k); } };
   return {
