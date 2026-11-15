@@ -14,6 +14,10 @@ Una extensión JSON describe una **API pública** que devuelve JSON. Indica qué
 
 > Usá solo APIs públicas y fuentes autorizadas. Manhuua no evade CAPTCHA, Cloudflare ni protecciones antibots.
 
+## Fuentes integradas
+
+MangaDex viene integrada (API oficial, sin pegar JSON): ver [MANGADEX.md](MANGADEX.md). La auditoría de otras plataformas y por qué no se integran está en [FUENTES.md](FUENTES.md).
+
 ## Instalar
 
 En **Más → Extensiones** (`#/extensions`) hay tres formas de instalar:
