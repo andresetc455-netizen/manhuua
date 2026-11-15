@@ -16,7 +16,31 @@ Una extensión JSON describe una **API pública** que devuelve JSON. Indica qué
 
 ## Fuentes integradas
 
-MangaDex viene integrada (API oficial, sin pegar JSON): ver [MANGADEX.md](MANGADEX.md). La auditoría de otras plataformas y por qué no se integran está en [FUENTES.md](FUENTES.md).
+MangaDex viene integrada (API oficial, sin pegar JSON): ver [MANGADEX.md](MANGADEX.md). La auditoría de las 25 plataformas y por qué la mayoría solo se enlaza está en [FUENTES.md](FUENTES.md).
+
+### MangaUpdates (solo metadatos)
+
+Se instala desde **Más → Extensiones → Fuentes integradas recomendadas**.
+
+- **Qué hace:** búsqueda por título y ficha (autores, artistas, géneros, tipo, estado, año, editoriales, títulos alternativos, sinopsis y portada).
+- **Qué no hace:** no tiene capítulos ni lectura, porque MangaUpdates no aloja contenido. La ficha lo dice y enlaza a la obra en mangaupdates.com.
+- **Sin catálogo sin texto:** su API solo permite buscar, así que el catálogo de Explorar no la consulta cuando no hay texto.
+- **Backend** (`server/mangaupdates.mjs`):
+
+| Ruta | Qué hace |
+|---|---|
+| `GET /mangaupdates/search?q=&page=&perpage=` | `POST /v1/series/search` con un cuerpo armado por el backend: solo `search`, `page` (1–200) y `perpage` (1–24 desde la app, máximo 50). |
+| `GET /mangaupdates/series?id=` | `GET /v1/series/{id}`, con `id` numérico. |
+| `GET /mangaupdates/cover?url=` | Portada, solo desde `https://cdn.mangaupdates.com/image/…`. Sin redirecciones, solo `image/*`, como máximo 4 MB. |
+| `GET /mangaupdates/status` | Contadores, caché y pausa por 429. |
+
+- **Límites:** 1 petición por segundo y 2 a la vez, con una cola de 30. Ante un 429 se respeta `Retry-After` y no se vuelve a consultar durante la pausa. Caché: 10 minutos las búsquedas, 1 hora las fichas y 6 horas las portadas.
+- **Sin redirecciones** y con la misma protección SSRF de siempre (`safeRequest`). Usa el mismo User-Agent propio que MangaDex. No usa cuenta ni credenciales.
+- **Modo de prueba:** `MU_API_BASE` y `MU_IMG_HOST` funcionan solo con `ALLOW_PRIVATE=true`; en producción se ignoran.
+
+### Plataformas oficiales y lectura externa
+
+En **Extensiones → Plataformas oficiales** están las 25 plataformas auditadas, con su clase (A–D), estado e idiomas, y un enlace al sitio oficial. En la ficha de una obra de MangaDex aparecen los enlaces de **Lectura oficial** que publica MangaDex (traducción oficial y edición original). Se abren en la plataforma; Manhuua no lee su contenido.
 
 ## Rendimiento del backend
 
