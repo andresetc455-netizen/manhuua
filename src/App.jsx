@@ -13,6 +13,7 @@ import Settings from './views/Settings.jsx';
 import { ExtensionHome, RemoteSeries } from './views/Extension.jsx';
 import { Updates, History, Browse, More } from './views/Feeds.jsx';
 import YouTubePanel from './views/YouTube.jsx';
+import { migrateSources } from './online.js';
 import Extensions, { StateDot } from './views/Extensions.jsx';
 import WorkView from './views/WorkView.jsx';
 
@@ -109,7 +110,7 @@ export default function App() {
   const [menu, setMenu] = useState(false);
   const [adding, setAdding] = useState(false);
   useTheme(s.theme);
-  useEffect(() => { detectProxy(); detectRender(); }, []);
+  useEffect(() => { detectProxy(); detectRender(); migrateSources().catch((e) => console.warn('migración de fuentes', e)); }, []);
 
   const [view, a, b, c] = route;
   if (view === 'r') return <div className={'reader-wrap' + (s.ytOpen ? ' with-yt' : '')}><Reader key={a} chapterId={a} /><YouTubePanel /></div>;

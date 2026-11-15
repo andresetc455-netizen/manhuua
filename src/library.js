@@ -34,8 +34,11 @@ export async function saveChapter(series, { title, number, pages, url, sourceId 
   // Si el capítulo ya estaba "en línea" (sin descargar), se completa ese mismo registro: conserva
   // su id, el progreso de lectura y su lugar en la lista.
   const stub = url ? (await byIndex('chapters', 'seriesId', series.id)).find((c) => c.url === url) : null;
-  const ch = { ...(stub || {}), id: stub?.id || uid(), seriesId: series.id, title: title || stub?.title || `Capítulo ${number ?? ''}`.trim(), number: number ?? stub?.number ?? null, pageCount: pages.length, addedAt: stub?.addedAt || Date.now(), url, online: false, remotePages: null, ...(sourceId && !stub?.sourceId ? { sourceId } : {}) };
   const latest = (await get('series', series.id)) || series;
+  // La procedencia queda fija desde que se guarda: la del capítulo en línea, la indicada por la
+  // descarga o, si no hay, la fuente principal de la obra (o "local" para importados).
+  const src = stub?.sourceId || sourceId || (url && latest.extId) || 'local';
+  const ch = { ...(stub || {}), id: stub?.id || uid(), seriesId: series.id, title: title || stub?.title || `Capítulo ${number ?? ''}`.trim(), number: number ?? stub?.number ?? null, pageCount: pages.length, addedAt: stub?.addedAt || Date.now(), url, online: false, remotePages: null, sourceId: src };
   const cover = latest.cover || !firstPageCover ? null : await thumbnail(pages[0]);
   await write(['chapters', 'pages', 'series'], (o) => {
     o.chapters.put(ch);
@@ -61,7 +64,7 @@ export async function deleteChapter(id) {
   const ch = await get('chapters', id);
   const s = ch && (await get('series', ch.seriesId));
   // En obras en línea, borrar la descarga deja el capítulo disponible para leer en línea.
-  if (ch?.url && (s?.online || ch.sourceId) && !ch.online) {
+  if (ch?.url && s?.online && !ch.online) {
     await write(['chapters', 'pages'], (o) => { o.pages.delete(pageRange(id)); o.chapters.put({ ...ch, online: true, pageCount: null }); });
     return;
   }
@@ -87,14 +90,14 @@ export async function saveProgress(chapter, page, total) {
   const [prev, s] = await Promise.all([get('progress', chapter.id), get('series', chapter.seriesId)]);
   const done = !!prev?.done || page >= total - 1;
   await write(['progress', 'series'], (o) => {
-    o.progress.put({ chapterId: chapter.id, seriesId: chapter.seriesId, page, total, done, updatedAt: Date.now() });
+    o.progress.put({ chapterId: chapter.id, seriesId: chapter.seriesId, sourceId: chapter.sourceId || prev?.sourceId, page, total, done, updatedAt: Date.now() });
     if (s) o.series.put({ ...s, lastReadAt: Date.now(), lastChapterId: chapter.id });
   });
 }
 
 export async function markChapters(chapters, done) {
   await write('progress', (o) => chapters.forEach((c) =>
-    done ? o.progress.put({ chapterId: c.id, seriesId: c.seriesId, page: (c.pageCount || 1) - 1, total: c.pageCount, done: true, updatedAt: Date.now() })
+    done ? o.progress.put({ chapterId: c.id, seriesId: c.seriesId, sourceId: c.sourceId, page: (c.pageCount || 1) - 1, total: c.pageCount, done: true, updatedAt: Date.now() })
          : o.progress.delete(c.id)));
 }
 

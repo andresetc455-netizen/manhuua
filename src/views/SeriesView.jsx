@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useDb, get, byIndex, write } from '../db.js';
-import { sourceKey, seriesSources, equivalent, followSeries } from '../online.js';
+import { sourceKey, seriesSources, equivalent, followSeries, migrateSources } from '../online.js';
 import { useExtensions, getExtension, seriesDetail, isEnabled } from '../sources/extensions.js';
 import { searchAll } from '../sources/multi.js';
 import { compareWorks } from '../unify.js';
@@ -33,7 +33,12 @@ export default function SeriesView({ id }) {
   const active = keys.includes(srcSel) ? srcSel : keys.includes(s.activeSource) ? s.activeSource : keys.find(count) || keys[0];
   const chapters = keys.length > 1 ? allChapters.filter((c) => sourceKey(c, s) === active) : allChapters;
   const srcName = (k) => k === 'local' ? 'Local' : getExtension(k)?.name || seriesSources(s).find((x) => x.extId === k)?.extName || 'Fuente eliminada';
-  const srcState = (k) => { if (k === 'local') return ''; const x = getExtension(k); return x ? stateOf(x).label : 'extensión eliminada · se conservan los capítulos'; };
+  const linked = new Set(seriesSources(s).map((x) => x.extId));
+  const srcState = (k) => {
+    if (k === 'local') return '';
+    if (!linked.has(k)) return 'quitada de esta obra · se conservan sus capítulos';
+    const x = getExtension(k); return x ? stateOf(x).label : 'extensión eliminada · se conservan los capítulos';
+  };
   const pickSource = (k) => { setSrcSel(k); updateSeries(id, { activeSource: k }); };
 
   const pmap = new Map(progress.map((p) => [p.chapterId, p]));
@@ -60,17 +65,22 @@ export default function SeriesView({ id }) {
   };
   const detach = async (k) => {
     if (!confirm(`¿Quitar ${srcName(k)} de esta obra? Se conservan los capítulos descargados y los que tienen progreso.`)) return;
-    const keep = (c) => sourceKey(c, s) !== k || !c.online || pmap.has(c.id);
-    const drop = allChapters.filter((c) => !keep(c));
+    // Primero se fija la fuente de cada capítulo (datos anteriores), así cambiar la fuente principal
+    // nunca reasigna capítulos de una fuente a otra.
+    await migrateSources(s.id);
+    const fresh = await byIndex('chapters', 'seriesId', s.id);
+    const drop = fresh.filter((c) => c.sourceId === k && c.online && !pmap.has(c.id));
     const sources = seriesSources(s).filter((x) => x.extId !== k);
     const main = sources[0];
+    const latest = (await get('series', s.id)) || s;
     await write(['series', 'chapters'], (o) => {
-      drop.forEach((c) => o.chapters.delete(c.id));
-      o.series.put({ ...s, sources, activeSource: main?.extId, ...(s.extId === k ? { extId: main?.extId, extName: main?.extName, sourceUrl: main?.url } : {}) });
+      drop.forEach((c) => o.chapters.delete(c.id)); // solo capítulos en línea sin leer (se pueden volver a traer)
+      o.series.put({ ...latest, sources, activeSource: main?.extId || (latest.activeSource === k ? undefined : latest.activeSource), ...(latest.extId === k ? { extId: main?.extId, extName: main?.extName, sourceUrl: main?.url } : {}) });
     });
     setSrcSel(null);
   };
-  const readCount = progress.filter((p) => p.done).length;
+  // Estadísticas de la fuente elegida: leídos y total sobre los mismos capítulos.
+  const readCount = chapters.filter((c) => pmap.get(c.id)?.done).length;
   const started = progress.length > 0;
 
   const refresh = async () => {
@@ -119,7 +129,7 @@ export default function SeriesView({ id }) {
               <button className="src-pick" onClick={() => pickSource(k)}>
                 <b>{srcName(k)}</b><span className="muted small">{count(k)} capítulos{srcState(k) ? ` · ${srcState(k)}` : ''}</span>
               </button>
-              {k !== 'local' && keys.length > 1 && <button className="btn sm" onClick={() => detach(k)}>Quitar</button>}
+              {k !== 'local' && keys.length > 1 && linked.has(k) && <button className="btn sm" onClick={() => detach(k)}>Quitar</button>}
             </li>
           ))}
         </ul>

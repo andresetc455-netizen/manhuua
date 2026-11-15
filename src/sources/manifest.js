@@ -82,7 +82,18 @@ export function validateManifest(m) {
   if (!/^[a-z0-9][a-z0-9._-]{1,60}$/.test(m.id || '')) errs.push('"id" debe ser un identificador corto (minúsculas, números, punto, guion).');
   if (!str(m.name)) errs.push('Falta "name".');
   if (!/^\d+(\.\d+){0,3}$/.test(String(m.version || ''))) errs.push('"version" debe tener la forma 1.0.0.');
-  if (!httpUrl(m.baseUrl)) errs.push('"baseUrl" debe ser una URL http(s).');
+  const bu = httpUrl(m.baseUrl);
+  if (!bu || typeof m.baseUrl !== 'string' || !/^https?:\/\//i.test(m.baseUrl)) errs.push('"baseUrl" debe ser una URL http(s) absoluta, sin usuario ni contraseña.');
+  else if (/[?#]/.test(m.baseUrl)) errs.push('"baseUrl" no puede tener "?" ni "#".');
+  if ('hosts' in m) {
+    if (!Array.isArray(m.hosts)) errs.push('"hosts" debe ser una lista de dominios, por ejemplo ["cdn.ejemplo.org"].');
+    else {
+      if (m.hosts.length > 20) errs.push('"hosts" admite como máximo 20 dominios.');
+      for (const h of m.hosts) if (!normHost(h)) errs.push(`"hosts": "${String(h).slice(0, 60)}" no es un dominio completo válido (no se aceptan "com", "*", "*.com", IPs con comodín ni rutas).`);
+    }
+  }
+  if ('referer' in m && !(typeof m.referer === 'string' && httpUrl(m.referer) && /^https?:\/\//i.test(m.referer))) errs.push('"referer" debe ser una URL http(s).');
+  if ('icon' in m && !(typeof m.icon === 'string' && httpUrl(m.icon) && /^https?:\/\//i.test(m.icon))) errs.push('"icon" debe ser una URL http(s).');
   for (const k of ['catalog', 'chapters', 'pages']) if (!m[k]?.url) errs.push(`Falta "${k}.url".`);
   if (m.catalog && !m.catalog.fields?.title) errs.push('Falta "catalog.fields.title".');
   if (m.catalog && !m.catalog.fields?.id) errs.push('Falta "catalog.fields.id".');
@@ -97,12 +108,53 @@ export function validateManifest(m) {
   return errs;
 }
 
-/** Orígenes a los que la extensión puede pedir datos (baseUrl + "hosts"). */
-function allowed(m, url) {
-  const u = new URL(url);
-  const ok = [new URL(m.baseUrl).host, ...(m.hosts || [])];
-  return ok.some((h) => u.host === h || u.host.endsWith('.' + h));
+// ---------- dominios autorizados ----------
+// Sufijos que no son un dominio propio (no se aceptan como host ni como base de un comodín).
+const SUFFIX2 = /^(com|net|org|gov|gob|edu|ac|co|mil|int|nom|ltd|plc|sch|ne|or|go|in|biz|info)$/;
+const LABEL = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
+/**
+ * Normaliza y valida un dominio de "hosts". Devuelve {host, wildcard} o null si no es válido.
+ * Acepta "cdn.ejemplo.org", "cdn.ejemplo.org:8443" y el comodín "*.ejemplo.org" (solo al
+ * principio y sobre un dominio propio). Rechaza "com", "*", "*.com", "*.co.uk", IPs con comodín, etc.
+ */
+export function normHost(v) {
+  if (typeof v !== 'string') return null;
+  let h = v.trim().toLowerCase().replace(/\.$/, '');
+  if (!h || /[/@?#\s\\]/.test(h) || /^[a-z]+:/.test(h) && !/^[^:]+:\d+$/.test(h)) return null;
+  const wildcard = h.startsWith('*.');
+  if (wildcard) h = h.slice(2);
+  if (h.includes('*')) return null;
+  const m = h.match(/^([^:]+)(?::(\d{1,5}))?$/);
+  if (!m || (m[2] && (+m[2] < 1 || +m[2] > 65535))) return null;
+  const labels = m[1].split('.');
+  if (labels.length < 2 || !labels.every((l) => LABEL.test(l))) return null; // un solo nombre ("com", "localhost")
+  const tld = labels.at(-1);
+  if (!/^[a-z]{2,63}$/.test(tld) && !/^xn--[a-z0-9-]+$/.test(tld)) return null; // IPs y TLD numéricos
+  if (labels.length === 2 && SUFFIX2.test(labels[0]) && tld.length === 2) return null; // "com.ar", "co.uk"
+  if (wildcard && labels.length === 2 && SUFFIX2.test(labels[0])) return null;
+  return { host: m[1] + (m[2] ? ':' + m[2] : ''), wildcard };
 }
+
+/** Lista de dominios autorizados: el de baseUrl (exacto) + "hosts" válidos. */
+function authorized(m) {
+  const base = new URL(m.baseUrl);
+  const list = [{ host: base.host.toLowerCase(), wildcard: false }];
+  for (const h of Array.isArray(m.hosts) ? m.hosts : []) { const n = normHost(h); if (n) list.push(n); }
+  return list;
+}
+/** ¿La extensión puede pedir (datos o imágenes) a esta URL? Solo http(s) y dominios autorizados. */
+export function allowedUrl(m, url) {
+  let u; try { u = new URL(url); } catch { return false; }
+  if (!/^https?:$/.test(u.protocol) || u.username || u.password) return false;
+  const host = u.host.toLowerCase();
+  const [hh, hp] = host.split(':');
+  return authorized(m).some((a) => {
+    if (!a.wildcard) return host === a.host;
+    const [ah, ap] = a.host.split(':');
+    return hh.endsWith('.' + ah) && hp === ap; // comodín: solo subdominios, mismo puerto
+  });
+}
+const allowed = allowedUrl;
 
 class ApiError extends Error {}
 async function getJson(m, url, trace) {
@@ -127,7 +179,7 @@ function workOf(m, f, it, root, vars, forcedId) {
   return {
     url: `mf:${m.id}/s/${id}`, remoteId: id, title,
     altTitles: [...new Set(fieldAll(f.altTitles, it).filter((t) => t !== title))].slice(0, 30),
-    cover: cover ? httpUrl(cover, m.baseUrl) : null,
+    cover: cover && allowed(m, httpUrl(cover, m.baseUrl)) ? httpUrl(cover, m.baseUrl) : null,
     description: str(field(f.description, it, root, vars), LONG) || undefined,
     author: fieldAll(f.author, it).slice(0, 4).join(', ') || undefined,
     artist: fieldAll(f.artist, it).slice(0, 4).join(', ') || undefined,
@@ -236,7 +288,9 @@ export async function mPages(ext, chapterUrl) {
   const vars = { ...vars0(m), chapterId };
   const d = await getJson(m, fill(p.url, vars), []);
   const list = p.list ? getAllAt(d, p.list).flatMap((x) => (Array.isArray(x) ? x : [x])) : [d];
-  const urls = list.map((it) => httpUrl(p.image ? fill(p.image, vars, it, d) : it, m.baseUrl)).filter(Boolean);
+  const all = list.map((it) => httpUrl(p.image ? fill(p.image, vars, it, d) : it, m.baseUrl)).filter(Boolean);
+  const urls = all.filter((u) => allowed(m, u));
+  if (all.length && !urls.length) throw Object.assign(new Error(`Las imágenes están en un dominio no autorizado por la extensión (${new URL(all[0]).host}). Agregalo a "hosts" si corresponde.`), { kind: 'incompatible' });
   if (!urls.length) throw Object.assign(new Error('La API no devolvió imágenes para este capítulo (API incompatible o capítulo vacío).'), { kind: 'incompatible' });
   return [...new Set(urls)];
 }

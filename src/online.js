@@ -69,6 +69,30 @@ export function seriesSources(s) {
 export const sourceKey = (c, s) => c.sourceId || (c.url && s?.extId) || 'local';
 
 /**
+ * Migración (segura e idempotente): fija para siempre la fuente de los capítulos guardados antes
+ * de la versión multifuente, con la misma regla con la que se mostraban (sourceKey). Solo agrega el
+ * campo que falta: no borra ni cambia otros datos. También anota la fuente en su progreso.
+ * Con seriesId migra una sola obra. Devuelve la cantidad de capítulos actualizados.
+ */
+export async function migrateSources(seriesId) {
+  const series = seriesId ? [await get('series', seriesId)].filter(Boolean) : await getAll('series');
+  let n = 0;
+  for (const s of series) {
+    const chs = await byIndex('chapters', 'seriesId', s.id);
+    const src = new Map(chs.map((c) => [c.id, c.sourceId || sourceKey(c, s)]));
+    const fixCh = chs.filter((c) => !c.sourceId);
+    const fixPr = (await byIndex('progress', 'seriesId', s.id)).filter((p) => !p.sourceId && src.has(p.chapterId));
+    if (!fixCh.length && !fixPr.length) continue;
+    await write(['chapters', 'progress'], (o) => {
+      fixCh.forEach((c) => o.chapters.put({ ...c, sourceId: src.get(c.id) }));
+      fixPr.forEach((p) => o.progress.put({ ...p, sourceId: src.get(p.chapterId) }));
+    });
+    n += fixCh.length;
+  }
+  return n;
+}
+
+/**
  * Capítulo equivalente en otra fuente: mismo número y único en esa fuente → exacto.
  * Si no, el más cercano por número (exact: false, hay que confirmar) o null.
  */

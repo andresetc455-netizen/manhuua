@@ -3,7 +3,7 @@
 Una extensión JSON describe una **API pública** que devuelve JSON. Indica qué URLs pedir y en qué campos de la respuesta están los datos.
 
 - **No contiene ni ejecuta código.** Se rechaza cualquier cosa que no sea texto, número, lista u objeto, y también las URLs `javascript:`.
-- **Solo puede pedir datos a su propio dominio** (`baseUrl`) y a los que liste en `hosts`. Las imágenes pueden venir de cualquier CDN.
+- **Solo puede pedir datos e imágenes a su propio dominio** (`baseUrl`) y a los que liste en `hosts`. Esto vale para el catálogo, la búsqueda, la ficha, la paginación, las portadas y las imágenes de los capítulos. Una portada de otro dominio se descarta. Si las imágenes de un capítulo están en un dominio no declarado, el capítulo da error.
 - **No accede a otras partes de la app**, como la biblioteca, los ajustes, otras extensiones o las claves.
 - **Cada respuesta se valida antes de entrar al catálogo:**
   - Se descartan los ítems sin `id` o sin título, y los que tienen URLs que no son http(s).
@@ -33,7 +33,7 @@ Si se instala de nuevo un manifiesto con el mismo `id`, la extensión se actuali
   "name": "Mi fuente",
   "version": "1.0.0",
   "baseUrl": "https://api.ejemplo.org",
-  "hosts": ["cdn.ejemplo.org"],
+  "hosts": ["cdn.ejemplo.org", "*.imagenes.ejemplo.net"],
   "referer": "https://ejemplo.org/",
 
   "catalog": {
@@ -96,6 +96,26 @@ Si se instala de nuevo un manifiesto con el mismo `id`, la extensión se actuali
 | `detail` | ficha de una obra (opcional; usa `root` y `fields` sobre `catalog.fields`) | `{id}` |
 | `chapters` | capítulos de una obra | `{id}` `{page}` `{offset}` `{limit}` |
 | `pages` | imágenes de un capítulo | `{chapterId}` |
+
+### Dominios autorizados (`hosts`)
+
+`hosts` es opcional. Si está presente, tiene que ser una **lista** de hasta 20 dominios completos:
+
+- **Válidos:**
+  - `"cdn.ejemplo.org"`
+  - `"img.ejemplo.org:8443"` (con puerto)
+  - `"*.ejemplo.network"`: cualquier subdominio de `ejemplo.network`, pero no `ejemplo.network` en sí
+- **Se rechazan:**
+  - un texto suelto en lugar de una lista
+  - nombres de una sola parte: `"com"`, `"localhost"`
+  - sufijos: `"co.uk"`, `"com.ar"`
+  - comodines peligrosos: `"*"`, `"*.com"`, `"*.co.uk"`, `"a*b.org"`
+  - IPs
+  - rutas, usuarios o esquemas: `"x.org/a"`, `"http://x.org"`
+- **Se normalizan:** minúsculas, sin el punto final.
+- **Cómo se comparan:**
+  - Los dominios de `baseUrl` y de `hosts` se comparan exactos, con el puerto incluido. Un subdominio solo se acepta si se declara, o si cae bajo un comodín.
+  - `baseUrl`, `referer` e `icon` tienen que ser URLs http(s) absolutas, sin usuario ni contraseña.
 
 ### Rutas a los datos
 

@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getAt, getAllAt, fill, validateManifest, mBrowse, mDetail, mPages } from './sources/manifest.js';
+import { getAt, getAllAt, fill, validateManifest, mBrowse, mDetail, mPages, normHost, allowedUrl } from './sources/manifest.js';
 import { normTitle, compareWorks, groupWorks } from './unify.js';
 import { classify } from './sources/engine.js';
 import { equivalent, sourceKey } from './online.js';
 
 const B = 'https://api.test';
 const M = {
-  manhuua: 1, id: 'demo', name: 'Demo', version: '1.0.0', baseUrl: B,
+  manhuua: 1, id: 'demo', name: 'Demo', version: '1.0.0', baseUrl: B, hosts: ['cdn.test'],
   catalog: { url: '{base}/series?page={page}', list: 'data', limit: 2, total: 'total', fields: { id: 'id', title: 'attributes.title.es|attributes.title.en|attributes.title.*', altTitles: 'attributes.alt[]', cover: '{base}/covers/{.id}/{.relationships[type=cover].file}', author: 'relationships[type=author].name', status: 'attributes.status', genres: 'attributes.tags[].name', ids: { al: 'links.al' } } },
   search: { url: '{base}/series?q={q}&page={page}' },
   detail: { url: '{base}/series/{id}', root: 'data' },
@@ -125,5 +125,57 @@ describe('cambio de fuente', () => {
     const r = equivalent(list[1], list, s, 'B');
     expect(r.exact).toBe(false);
     expect(r.reason).toMatch(/no hay capítulo 2/);
+  });
+});
+
+describe('seguridad: dominios autorizados (hosts)', () => {
+  const base = { ...M };
+  const errsFor = (hosts) => validateManifest({ ...base, hosts });
+  it('rechaza hosts malformados o peligrosos', () => {
+    for (const bad of ['com', '*', '*.com', '*.co.uk', 'co.uk', 'com.ar', 'localhost', '1.2.3.4', '*.1.2.3.4', 'http://x.com', 'x.com/ruta', 'a*b.com', '*.*.x.com', 'x..com', '-x.com', 'user@x.com', '', ' ', 'x.com:99999'])
+      expect(errsFor([bad]).length, bad).toBeGreaterThan(0);
+    for (const notList of ['cdn.x.com', 'com', 5, { a: 1 }, null]) expect(errsFor(notList).length, String(notList)).toBeGreaterThan(0);
+    expect(errsFor(Array(21).fill('a.x.com')).length).toBeGreaterThan(0);
+  });
+  it('acepta y normaliza dominios completos y comodines seguros', () => {
+    expect(errsFor(['cdn.x.com', 'CDN.Ejemplo.org.', '*.mangadex.network', 'img.x.com:8443', 'xn--fiq228c.com'])).toEqual([]);
+    expect(normHost('CDN.Ejemplo.org.')).toEqual({ host: 'cdn.ejemplo.org', wildcard: false });
+    expect(normHost('*.mangadex.network')).toEqual({ host: 'mangadex.network', wildcard: true });
+  });
+  it('valida baseUrl, referer e icon', () => {
+    expect(validateManifest({ ...base, baseUrl: 'javascript:alert(1)' }).length).toBeGreaterThan(0);
+    expect(validateManifest({ ...base, baseUrl: 'https://u:p@api.test' }).length).toBeGreaterThan(0);
+    expect(validateManifest({ ...base, baseUrl: '/relativa' }).length).toBeGreaterThan(0);
+    expect(validateManifest({ ...base, referer: 'file:///etc/passwd' }).length).toBeGreaterThan(0);
+    expect(validateManifest({ ...base, icon: 'data:image/svg+xml,<svg onload=alert(1)>' }).length).toBeGreaterThan(0);
+  });
+  it('solo permite el dominio de baseUrl y los de hosts (exactos o comodín de subdominio)', () => {
+    const m = { baseUrl: 'https://api.x.com', hosts: ['cdn.x.com', '*.img.org', 'p.x.com:8443'] };
+    expect(allowedUrl(m, 'https://api.x.com/a')).toBe(true);
+    expect(allowedUrl(m, 'https://cdn.x.com/a.png')).toBe(true);
+    expect(allowedUrl(m, 'https://s1.img.org/a.png')).toBe(true);
+    expect(allowedUrl(m, 'https://p.x.com:8443/a')).toBe(true);
+    expect(allowedUrl(m, 'https://img.org/a.png')).toBe(false); // el comodín no incluye el dominio raíz
+    expect(allowedUrl(m, 'https://p.x.com/a')).toBe(false); // otro puerto
+    expect(allowedUrl(m, 'https://otro.x.com/a')).toBe(false); // subdominio no declarado
+    expect(allowedUrl(m, 'https://api.x.com.evil.com/a')).toBe(false);
+    expect(allowedUrl(m, 'https://evilapi.x.com/a')).toBe(false);
+    expect(allowedUrl(m, 'https://u:p@api.x.com/a')).toBe(false);
+    expect(allowedUrl(m, 'javascript:alert(1)')).toBe(false);
+    expect(allowedUrl({ ...m, hosts: 'com' }, 'https://evil.com/')).toBe(false); // hosts inválido guardado: se ignora
+    expect(allowedUrl({ ...m, hosts: ['com', '*'] }, 'https://evil.com/')).toBe(false);
+  });
+  it('bloquea peticiones, paginación, portadas e imágenes hacia dominios no autorizados', async () => {
+    const noCdn = { ...ext, manifest: { ...M, hosts: [] } };
+    await expect(mPages(noCdn, 'mf:demo/c/c1')).rejects.toThrow(/dominio no autorizado/);
+    const evilCover = { ...ext, manifest: { ...M, catalog: { ...M.catalog, fields: { ...M.catalog.fields, cover: 'https://evil.test/{.id}.jpg' } } } };
+    expect((await mBrowse(evilCover)).items[0].cover).toBe(null);
+    routes['/series/s9'] = { data: series('s9', 'Nueve') };
+    routes['/series/s9/chapters?offset=0'] = { data: [{ id: 'n1', num: 1, lang: 'es' }], next: 'https://evil.test/steal?offset=2' };
+    const nextEvil = { ...ext, manifest: { ...M, chapters: { ...M.chapters, next: 'next' } } };
+    const d = await mDetail(nextEvil, 'mf:demo/s/s9');
+    expect(d.chapters).toHaveLength(1);
+    expect(d.diag.pageError).toMatch(/otro dominio/);
+    expect(fetch.mock.calls.some(([u]) => String(u).includes('evil.test'))).toBe(false);
   });
 });
