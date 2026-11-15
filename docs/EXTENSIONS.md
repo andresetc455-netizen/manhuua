@@ -18,6 +18,21 @@ Una extensión JSON describe una **API pública** que devuelve JSON. Indica qué
 
 MangaDex viene integrada (API oficial, sin pegar JSON): ver [MANGADEX.md](MANGADEX.md). La auditoría de otras plataformas y por qué no se integran está en [FUENTES.md](FUENTES.md).
 
+## Rendimiento del backend
+
+Valores por defecto. No hace falta tocarlos en Render; si se quiere, se pueden ajustar por variables de entorno.
+
+| Variable | Defecto | Qué controla |
+|---|---|---|
+| `PROXY_CONCURRENCY` / `PROXY_QUEUE` | 16 / 64 | Descargas simultáneas del proxy en todo el servidor y la cola. Con la cola llena responde 503 con `Retry-After: 5`, y la app reintenta o informa. |
+| `MAX_BYTES` | 25 MB | Tope por respuesta. Las respuestas correctas se **transmiten** sin guardarse enteras en memoria; si una supera el tope, se corta. |
+| `FETCH_TIMEOUT_MS` | 20 s | Tiempo máximo para conectar y también para cada pausa durante la transmisión. Un sitio que deja de enviar se corta. |
+| `RENDER_IDLE_MS` / `RENDER_RECYCLE` | 5 min / 40 | Chromium se cierra tras 5 minutos sin uso y se reinicia cada 40 renderizados, para que la memoria se mantenga estable. |
+
+MangaDex tiene sus propios límites y cachés: ver [MANGADEX.md](MANGADEX.md).
+
+En el lector, las páginas de las extensiones JSON y de MangaDex se piden a medida que se acercan. Las que quedan lejos (unas 4 pantallas) se liberan y se vuelven a pedir si se regresa; el navegador las tiene en caché. Así un capítulo largo no hace crecer la memoria.
+
 ## Instalar
 
 En **Más → Extensiones** (`#/extensions`) hay tres formas de instalar:

@@ -100,6 +100,29 @@ El proxy general (`/proxy`) no se modificó ni se debilitó.
   2. Buscar una obra.
   3. Abrir un capítulo.
 
+## Estado de la verificación real (2026-11-15)
+
+**Pendiente.** Ni el contenedor de desarrollo ni la herramienta de lectura web pudieron llegar a `api.mangadex.org`. El detalle está en [FUENTES.md](FUENTES.md).
+
+El código depende de estos campos de la API v5, tomados de la documentación oficial:
+
+| Endpoint | Campos usados |
+|---|---|
+| `/manga` y `/manga/{id}` | `data[].id`; `attributes.title`, `altTitles[]`, `description`, `status`, `year`, `contentRating`, `originalLanguage`, `availableTranslatedLanguages`, `tags[].attributes.{name,group}`, `updatedAt`; `relationships[]`: `author` y `artist` (`attributes.name`), `cover_art` (`attributes.fileName`); `total` |
+| `/manga/{id}/feed` | `data[].id`; `attributes.chapter`, `volume`, `title`, `translatedLanguage`, `pages`, `externalUrl`, `publishAt`; `relationships[]` `scanlation_group` (`attributes.name`); `total` |
+| `/at-home/server/{id}` | `result`, `baseUrl`, `chapter.hash`, `chapter.data[]`, `chapter.dataSaver[]` |
+| `/manga/tag` y `/author` | `data[].id`; `attributes.name`, `attributes.group` |
+
+Si un campo faltara, la obra o el capítulo se muestran sin ese dato: nunca se inventa. Si el feed rechaza `limit=500`, se usa 100.
+
+### Cómo verificarlo en producción (después del push)
+
+1. Abrir Más → Extensiones → MangaDex → **Instalar**. Debería decir "Funcionando · 24 obras" y mostrar los idiomas.
+2. Ir a Explorar, buscar un título conocido y abrir la ficha. Comprobar portada, autor, géneros y capítulos en `es-la` / `es` con su grupo.
+3. Tocar **Comenzar a leer**. Las páginas tienen que cargar progresivamente; probar "Siguiente" y volver a abrir la app para confirmar que el progreso quedó guardado.
+4. Descargar un capítulo y abrirlo sin conexión.
+5. Revisar `https://manhuua.onrender.com/mangadex/status`: muestra peticiones, caché y si hay una pausa por 429.
+
 ## Limitaciones
 
 - Desde la documentación no se pudieron verificar los parámetros exactos de `/manga` y del feed: las páginas de referencia no cargaron. Se usaron los nombres de la API v5, con respaldo si el feed rechaza `limit=500`.

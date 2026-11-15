@@ -15,56 +15,47 @@ Fecha: 2026-11-15. Rama `deploy-cf-render`.
   - No se evaden CAPTCHA, DRM, muros de pago, inicio de sesión ni protecciones antibots.
   - El usuario puede seguir agregando por su cuenta cualquier URL con el motor genérico (HTML/JSON), con las mismas protecciones de siempre.
 
-## Clasificación
+## Estado por plataforma (actualizado 2026-11-15, segunda revisión)
 
-| Código | Significado |
-|---|---|
-| A | Integración completa autorizada (API oficial con lectura permitida) |
-| B | Integración parcial |
-| C | Solo catálogo y metadatos (sin lectura en la app; enlace a la plataforma) |
-| D | API disponible, pero lectura restringida |
-| E | Fuente bloqueada (rechaza servidores o automatización) |
-| F | No integrable actualmente (licencia, pago/DRM, cierre o términos) |
+Estados posibles:
+- **Integrada y verificada:** probada contra el servicio real. Hoy no hay ninguna.
+- **Integrada, verificación real pendiente:** el código está completo y probado contra un servidor simulado con el formato documentado. Falta probarla contra el servicio real.
+- **Solo metadatos:** catálogo y fichas, sin lectura.
+- **Pendiente de verificación:** existe una vía oficial (API o RSS), pero no se pudieron confirmar el formato real ni los términos de uso.
+- **No integrable actualmente.**
 
-## Tabla de compatibilidad
+### Intentos de verificación real (2026-11-15)
 
-| # | Plataforma | API | Catálogo / búsqueda | Capítulos | Lectura en la app | Descargas | Clase | Motivo / limitaciones |
-|---|---|---|---|---|---|---|---|---|
-| 1 | MangaDex | Oficial, pública y documentada (REST JSON) | Sí (`/manga`) | Sí (`/manga/{id}/feed`) | Sí (MangaDex@Home, vía backend propio) | Sí, para uso personal | **A, integrada** | Exige proxy propio (sin CORS ni hotlinking), User-Agent real, ~5 req/s por IP, at-home 40/min, reportes a MangaDex@Home, crédito a MangaDex y grupos, sin publicidad ni pago. Algunos capítulos son enlaces externos (p. ej. MANGA Plus) y no se leen en la app. |
-| 2 | NovelCool | No | HTML | HTML | — | — | F | Agregador de scans/traducciones sin licencia. Disponible solo como URL que agregue el usuario. |
-| 3 | ManhwaWeb | No pública (SPA con API interna) | — | — | — | — | F | Scans sin licencia. API interna no documentada ni autorizada. |
-| 4 | LeerCapítulo | No | HTML | HTML | — | — | F | Scans sin licencia. |
-| 5 | OlympusXYZ | No pública | — | — | — | — | E / F | Responde 403 al backend (bloqueo a IPs de servidor ya observado). Scans sin licencia. |
-| 6 | MANGA Plus (Shueisha) | No pública (API interna protobuf) | — | — | — | — | F | Servicio oficial gratuito, pero sin API para terceros. Restricciones regionales, imágenes cifradas por capítulo y términos que no autorizan clientes de terceros. Solo enlace externo; MangaDex ya enlaza sus capítulos oficiales. |
-| 7 | MangaSee | — | — | — | — | — | F | Cerró en enero de 2025 (renombrado a WeebCentral). Scans sin licencia. |
-| 8 | MangaPark | No | HTML/GraphQL interno | — | — | — | F | Scans sin licencia. |
-| 9 | MangaKakalot | No | HTML | HTML | — | — | F | Scans sin licencia. Muchos clones y dominios cambiantes. |
-| 10 | MangaBuddy | No | HTML | HTML | — | — | F | Scans sin licencia. |
-| 11 | Bato.to | No | HTML | HTML | — | — | F | Scans sin licencia. Dominios espejo cambiantes. |
-| 12 | ComicK | API interna (cerrada) | — | — | — | — | F | Cerró el servicio de lectura en 2025 (anunciado como seguimiento "legal"). API no documentada. |
-| 13 | WeebCentral | No | HTML (htmx) | HTML | — | — | F | Sucesor de MangaSee, scans sin licencia. |
-| 14 | MangaReader | No | HTML | HTML | — | — | F | Scans sin licencia. Imágenes ofuscadas. |
-| 15 | WEBTOON | No pública. Hay RSS oficial por serie (**sin verificar** que siga vigente) | — | Lista de episodios por RSS | No | No | C (pendiente) | Imágenes protegidas por Referer (hotlink) y términos que prohíben la extracción. Como mucho, metadatos y enlace al episodio oficial. No se integró por no poder verificarlo. |
-| 16 | Tapas | No pública | — | — | No | No | F | Contenido con pago/monedas e inicio de sesión. |
-| 17 | Tappytoon | No pública | — | — | No | No | F | Pago, DRM y restricciones regionales. |
-| 18 | Lezhin Comics | No pública | — | — | No | No | F | Pago, inicio de sesión y contenido adulto con verificación. |
-| 19 | Pocket Comics | No pública | — | — | No | No | F | Pago, monedas e inicio de sesión. |
-| 20 | Toomics | No pública | — | — | No | No | F | Suscripción y contenido adulto con verificación. |
-| 21 | Manta | No pública (app con suscripción) | — | — | No | No | F | Suscripción y DRM. |
-| 22 | MangaUpdates | Oficial, pública y documentada (`api.mangaupdates.com/v1`, OpenAPI) | Sí (búsqueda POST) | Solo novedades de grupos (no contenido) | No (no aloja capítulos) | No | C (recomendada, no integrada) | Base de datos de metadatos. Útil para unificar fichas; no aloja lectura. Pendiente por alcance: la búsqueda es POST y el backend solo hace GET. |
-| 23 | Novel Updates | No | HTML (protegido por Cloudflare) | Enlaces a sitios de traductores | No | No | E / C | Índice de novelas que enlaza a terceros. Bloquea automatización. |
-| 24 | WuxiaWorld | No pública | — | — | No | No | F | Comercial (suscripción y capítulos pagos). |
-| 25 | Webnovel | No pública | — | — | No | No | F | Comercial (monedas y app). Bloquea automatización. |
-| 26 | Royal Road | No pública. RSS oficial por obra (**sin verificar**) | — | Lista de capítulos (RSS) | **Sin verificar** que los términos permitan mostrar el texto en otra app | No | C (pendiente) | Obras gratuitas de autores; el derecho es de cada autor. Sin confirmar términos, solo metadatos y enlace. |
-| 27 | Scribble Hub | No pública. RSS por serie (**sin verificar**) | — | Lista de capítulos (RSS) | **Sin verificar** | No | C (pendiente) | Igual que Royal Road. |
+| Destino | Desde el contenedor (`curl`) | Desde la herramienta de lectura web |
+|---|---|---|
+| `api.mangadex.org` (`/manga`, `/manga/tag`, `/author`) | sin conexión | rechazado (error del cliente). No se obtuvo ninguna respuesta. |
+| `api.mangaupdates.com/v1/` y `/v1/genres` | sin conexión | **200 OK**. `{"status":"success","reason":"MangaUpdates API v1 is ONLINE"}`; `/genres` devuelve una lista JSON de objetos `{id, genre, description, stats, demographic}`. No publica términos de uso en esa respuesta. |
+| `royalroad.com/syndication/…`, sus términos | sin conexión | rechazado |
+| `scribblehub.com/rssfeed.php…` | sin conexión | rechazado |
+| WEBTOON, Novel Updates y el resto | sin conexión | no se intentó (sin API pública) |
 
-### Resumen
+**Conclusión:** ninguna prueba de lectura real fue posible. La de MangaDex queda para hacerla en la app publicada; los pasos están en [MANGADEX.md](MANGADEX.md).
 
-- **Integrada con lectura autorizada:** MangaDex (1).
-- **Candidatas a solo metadatos, sin integrar** porque no se pudieron verificar en este entorno: MangaUpdates, WEBTOON, Royal Road, Scribble Hub y Novel Updates.
-- **No integrables** por licencia, pago, DRM, cierre o bloqueo: las 21 restantes.
+### Tabla
 
-Ninguna se deja como fuente predefinida. El motor genérico sigue permitiendo que el usuario agregue sitios y manifiestos JSON por su cuenta, bajo su responsabilidad y con todas las protecciones (hosts autorizados, SSRF, redirecciones validadas, sin proxies públicos para JSON).
+| # | Plataforma | API | Metadatos | Capítulos | Lectura | Estado |
+|---|---|---|---|---|---|---|
+| 1 | MangaDex | Oficial y documentada | Sí | Sí, por idioma y grupo | Sí (MangaDex@Home por el backend) | **Integrada, verificación real pendiente** |
+| 22 | MangaUpdates | Oficial (`api.mangaupdates.com/v1`): en línea, formato JSON confirmado | Sí | No (solo lanzamientos de grupos) | No (no aloja contenido) | **Pendiente de verificación**: términos de uso sin confirmar y búsqueda por POST (requiere una ruta propia en el backend) |
+| 15 | WEBTOON | No pública. RSS por serie sin confirmar | RSS | Lista de episodios por RSS | No (imágenes con protección de Referer) | **Pendiente de verificación**, solo metadatos |
+| 26 | Royal Road | No pública. RSS por obra sin confirmar | RSS | Lista por RSS | Sin confirmar en los términos | **Pendiente de verificación**, solo metadatos |
+| 27 | Scribble Hub | No pública. RSS sin confirmar | RSS | Lista por RSS | Sin confirmar | **Pendiente de verificación**, solo metadatos |
+| 23 | Novel Updates | No | HTML (Cloudflare) | Enlaces a terceros | No | **No integrable actualmente**: bloquea la automatización |
+| 6 | MANGA Plus | Interna (protobuf), no para terceros | — | — | No | **No integrable**: términos, región, imágenes cifradas. Sus capítulos aparecen en MangaDex como externos y se informan. |
+| 16–21 | Tapas, Tappytoon, Lezhin, Pocket Comics, Toomics, Manta | No pública | — | — | No | **No integrables**: pago, DRM o cuenta |
+| 24–25 | WuxiaWorld, Webnovel | No pública | — | — | No | **No integrables**: comerciales, de pago |
+| 2–5, 8–11, 13–14 | NovelCool, ManhwaWeb, LeerCapítulo, OlympusXYZ, MangaPark, MangaKakalot, MangaBuddy, Bato.to, WeebCentral, MangaReader | No | HTML | HTML | — | **No integrables** como fuentes predefinidas: scans sin licencia. OlympusXYZ además responde 403 a servidores. El usuario puede agregarlas por su cuenta. |
+| 7, 12 | MangaSee, ComicK | — | — | — | — | **No integrables**: cerradas en 2025 |
+
+### Qué haría falta para pasar de "pendiente" a "solo metadatos"
+
+1. **MangaUpdates:** confirmar sus condiciones de uso y agregar una ruta del backend (`/mangaupdates/search`, con POST y lista blanca) con un ritmo propio. La ficha se mostraría sin capítulos y con un enlace a la obra.
+2. **RSS (WEBTOON, Royal Road, Scribble Hub):** verificar los términos y que el RSS exista. Haría falta un lector RSS en el backend con hosts fijos. Solo lista de capítulos y enlaces al sitio, sin mostrar contenido.
 
 ### Modo texto (novelas)
 
