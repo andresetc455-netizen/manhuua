@@ -7,6 +7,8 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { render, renderAvailable, closeBrowser } from './render.mjs';
 import { createMangadex, mdConfig } from './mangadex.mjs';
 import { loadConfig, originAllowed, assertPublicUrl, rateLimiter, clientIp, readLimited, limiter, safeRequest, parseHostPolicy, hostAllowed } from './security.mjs';
@@ -18,6 +20,7 @@ const UA = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Geck
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon' };
 const limits = { proxy: rateLimiter(C.proxyPerMin), render: rateLimiter(C.renderPerMin), mangadex: rateLimiter(C.proxyPerMin) };
 const renderSlot = limiter(C.renderConcurrency, C.renderQueue);
+const proxySlot = limiter(C.proxyConcurrency, C.proxyQueue);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 const MD = createMangadex({ cfg: mdConfig(process.env, { allowPrivate: C.allowPrivate }), allowPrivate: C.allowPrivate, timeoutMs: C.fetchTimeoutMs, log });
 
@@ -59,25 +62,39 @@ async function proxy(req, u, res, cors) {
   if (!/^https?:\/\//i.test(target)) return send(res, 400, cors, 'manhuua-proxy: parámetro url inválido');
   try {
     const policy = parseHostPolicy(u.searchParams.get('hosts') || '');
+    await proxySlot(async () => {
     const { r, finalUrl } = await fetchPublic(target, u.searchParams.get('referer'), policy);
-    const buf = await readLimited(r, C.maxBytes);
-    send(res, r.status, {
+    const len = +r.headers.get('content-length');
+    if (len && len > C.maxBytes) { r.body.destroy?.(); throw Object.assign(new Error(`Respuesta demasiado grande (${len} bytes)`), { code: 413 }); }
+    // Respuesta correcta: se transmite a medida que llega (sin guardar imágenes enteras en memoria),
+    // con el mismo tope de tamaño. Los errores se leen completos para detectar verificaciones antibots.
+    const buf = r.ok ? null : await readLimited(r, C.maxBytes);
+    const headers = {
       ...cors,
       'content-type': r.headers.get('content-type') || 'application/octet-stream',
       'cache-control': r.ok ? 'public, max-age=1800' : 'no-store',
       'x-final-url': finalUrl,
       // Para el diagnóstico: quién atendió en el sitio y si respondió con una verificación antibots.
       'x-upstream-server': (r.headers.get('server') || '').slice(0, 40),
-      ...(!r.ok && (r.headers.get('cf-mitigated') === 'challenge' || /just a moment|attention required|captcha|challenge-platform/i.test(buf.subarray(0, 4000).toString('latin1'))) ? { 'x-upstream-challenge': '1' } : {}),
+      ...(buf && (r.headers.get('cf-mitigated') === 'challenge' || /just a moment|attention required|captcha|challenge-platform/i.test(buf.subarray(0, 4000).toString('latin1'))) ? { 'x-upstream-challenge': '1' } : {}),
       // El contenido ajeno nunca se ejecuta en el origen del backend.
       'content-security-policy': "sandbox; default-src 'none'",
       'x-content-type-options': 'nosniff',
-    }, buf);
+    };
+    if (buf) return send(res, r.status, headers, buf);
+    res.writeHead(r.status, headers);
+    let n = 0, idle;
+    const cap = new Transform({ transform(c, _, cb) { n += c.length; arm(); cb(n > C.maxBytes ? Object.assign(new Error('Respuesta demasiado grande'), { code: 413 }) : null, c); } });
+    const arm = () => { clearTimeout(idle); idle = setTimeout(() => cap.destroy(Object.assign(new Error('Tiempo agotado'), { code: 504 })), C.fetchTimeoutMs); };
+    arm();
+    await pipeline(r.body, cap, res).catch(() => res.destroy()).finally(() => clearTimeout(idle)); // corte, cliente que se fue, tope o sitio que dejó de enviar
+    });
   } catch (e) {
+    if (res.headersSent) return res.destroy();
     const code = Number.isInteger(e.code) && e.code >= 400 ? e.code : e.name === 'TimeoutError' ? 504 : 502;
     // Diagnóstico de política: a qué URL se intentó ir y por qué se rechazó.
     const blocked = e.blocked ? { 'x-manhuua-blocked-url': e.blocked.url, 'x-manhuua-blocked-reason': e.blocked.reason } : {};
-    send(res, code, { ...cors, 'content-type': 'text/plain; charset=utf-8', 'x-manhuua-error': '1', ...blocked }, 'manhuua-proxy: ' + e.message);
+    send(res, code, { ...cors, 'content-type': 'text/plain; charset=utf-8', 'x-manhuua-error': '1', ...blocked, ...(code === 503 ? { 'retry-after': '5' } : {}) }, 'manhuua-proxy: ' + e.message);
   }
 }
 
@@ -87,7 +104,7 @@ async function renderRoute(req, u, res, cors) {
   try {
     await assertPublicUrl(target, { allowPrivate: C.allowPrivate });
     const kind = ['chapter', 'series'].includes(u.searchParams.get('kind')) ? u.searchParams.get('kind') : 'catalog';
-    const out = await renderSlot(() => render(target, kind, { maxMs: C.renderTimeoutMs, allowPrivate: C.allowPrivate }));
+    const out = await renderSlot(() => render(target, kind, { maxMs: C.renderTimeoutMs, allowPrivate: C.allowPrivate, idleMs: C.renderIdleMs, recycle: C.renderRecycle }));
     sendJson(res, 200, cors, out);
   } catch (e) {
     const code = [400, 403, 501, 503].includes(e.code) ? e.code : 502;

@@ -27,6 +27,12 @@ export function loadConfig(env = process.env) {
     renderTimeoutMs: num(env.RENDER_TIMEOUT_MS, 25000),
     renderConcurrency: Math.max(1, num(env.RENDER_CONCURRENCY, 1)),
     renderQueue: num(env.RENDER_QUEUE, 6),
+    // Descargas simultáneas del proxy (todo el servidor) y cola: evita que una lectura larga sature la instancia.
+    proxyConcurrency: Math.max(1, num(env.PROXY_CONCURRENCY, 16)),
+    proxyQueue: num(env.PROXY_QUEUE, 64),
+    // Chromium: se cierra tras este tiempo sin uso y se recicla cada N renderizados (memoria estable).
+    renderIdleMs: num(env.RENDER_IDLE_MS, 300000),
+    renderRecycle: num(env.RENDER_RECYCLE, 40),
   };
 }
 

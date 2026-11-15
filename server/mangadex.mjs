@@ -126,12 +126,14 @@ export function pacer({ perSec, concurrency, maxQueue }) {
     return new Promise((res, rej) => { q.push({ fn, res, rej }); pump(); });
   };
 }
-function ttlCache(max) {
-  const m = new Map();
+/** Caché con vencimiento, máximo de entradas y (opcional) de bytes en total (portadas). */
+function ttlCache(max, maxBytes = Infinity, sizeOf = () => 0) {
+  const m = new Map(); let bytes = 0;
+  const drop = (k) => { const e = m.get(k); if (e) { bytes -= e.n; m.delete(k); } };
   return {
-    get(k) { const e = m.get(k); if (!e) return undefined; if (e.exp < Date.now()) { m.delete(k); return undefined; } return e.v; },
-    set(k, v, ttl) { m.delete(k); m.set(k, { v, exp: Date.now() + ttl }); while (m.size > max) m.delete(m.keys().next().value); },
-    delete: (k) => m.delete(k), get size() { return m.size; },
+    get(k) { const e = m.get(k); if (!e) return undefined; if (e.exp < Date.now()) { drop(k); return undefined; } m.delete(k); m.set(k, e); return e.v; },
+    set(k, v, ttl) { drop(k); const n = sizeOf(v); if (n > maxBytes / 4) return; m.set(k, { v, n, exp: Date.now() + ttl }); bytes += n; while (m.size > max || bytes > maxBytes) drop(m.keys().next().value); },
+    delete: drop, get size() { return m.size; }, get bytes() { return bytes; },
   };
 }
 const TTL = { list: 120e3, manga: 600e3, feed: 300e3, tag: 86400e3, author: 3600e3 };
@@ -141,7 +143,8 @@ export function createMangadex({ cfg = mdConfig(), request = safeRequest, allowP
   const gate = pacer({ perSec: cfg.perSec, concurrency: 4, maxQueue: 60 });
   const imgGate = pacer({ perSec: 10, concurrency: 6, maxQueue: 120 });
   const atHomeLimit = rateLimiter(cfg.atHomePerMin);
-  const cache = ttlCache(400), atCache = ttlCache(300), covers = ttlCache(150);
+  const SIZE = Symbol('bytes');
+  const cache = ttlCache(400, 32 * 1024 * 1024, (j) => j?.[SIZE] || 0), atCache = ttlCache(300), covers = ttlCache(300, 24 * 1024 * 1024, (v) => v.buf.length); // portadas: ≤ 24 MB en memoria
   const inflight = new Map();
   const stats = { upstream: 0, cacheHits: 0, coalesced: 0, limited: 0, reports: 0, coolUntil: 0 };
 
@@ -172,7 +175,7 @@ export function createMangadex({ cfg = mdConfig(), request = safeRequest, allowP
       if (r.status === 429) { cool(r.get); throw err(429, 'MangaDex limitó las peticiones (429). Esperá antes de reintentar.', { retryAfter: Math.max(1, Math.ceil((stats.coolUntil - Date.now()) / 1000)), upstream: true }); }
       let j; try { j = JSON.parse(buf.toString('utf8')); } catch { throw err(r.status >= 400 ? r.status : 502, `MangaDex respondió HTTP ${r.status} sin JSON`, { upstream: true }); }
       if (r.status >= 400) throw err(r.status, `MangaDex HTTP ${r.status}: ${String(j?.errors?.[0]?.detail || j?.errors?.[0]?.title || '').slice(0, 200)}`, { upstream: true });
-      if (ttl) cache.set(key, j, ttl);
+      if (ttl) { Object.defineProperty(j, SIZE, { value: buf.length }); cache.set(key, j, ttl); }
       return j;
     }));
   }
@@ -266,7 +269,7 @@ export function createMangadex({ cfg = mdConfig(), request = safeRequest, allowP
         else { hit = await once(url, () => image(url, 8 * 1024 * 1024)); covers.set(url, hit, 6 * 3600e3); }
         return send(res, 200, { ...cors, 'content-type': hit.ct, 'cache-control': 'public, max-age=604800', 'x-content-type-options': 'nosniff', 'content-security-policy': "sandbox; default-src 'none'" }, hit.buf);
       }
-      if (route === 'status') return json(200, { ok: true, cooling: Math.max(0, Math.ceil((stats.coolUntil - Date.now()) / 1000)), ...stats, cache: cache.size }, { 'cache-control': 'no-store' });
+      if (route === 'status') return json(200, { ok: true, cooling: Math.max(0, Math.ceil((stats.coolUntil - Date.now()) / 1000)), ...stats, cache: cache.size, cacheBytes: cache.bytes, covers: covers.size, coverBytes: covers.bytes }, { 'cache-control': 'no-store' });
       throw err(404, 'Ruta de MangaDex desconocida');
     } catch (e) {
       const code = Number.isInteger(e.code) && e.code >= 400 && e.code < 600 ? e.code : e.name === 'TimeoutError' ? 504 : 502;

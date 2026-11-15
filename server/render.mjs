@@ -41,7 +41,20 @@ const HEAVY = new Set(['image', 'media', 'font']);
 const MAX_SUB = 15 * 1024 * 1024;
 const HOP = new Set(['content-length', 'transfer-encoding', 'connection', 'keep-alive', 'content-encoding']);
 
-export async function render(url, kind = 'catalog', { maxMs = 20000, allowPrivate = true } = {}) {
+// Memoria estable: Chromium se cierra tras un rato sin uso (vuelve a abrirse al próximo pedido) y se
+// recicla cada N renderizados, para que una sesión larga no acumule memoria en una instancia chica.
+let active = 0, uses = 0, idleTimer = null;
+export const renderStats = () => ({ open: !!browserP, active, uses });
+export async function render(url, kind = 'catalog', { maxMs = 20000, allowPrivate = true, idleMs = 300000, recycle = 40 } = {}) {
+  clearTimeout(idleTimer); active++;
+  try { return await renderOnce(url, kind, { maxMs, allowPrivate }); }
+  finally {
+    active--; uses++;
+    if (!active && recycle && uses >= recycle) { uses = 0; await closeBrowser(); }
+    else if (!active && idleMs) { idleTimer = setTimeout(() => { if (!active) { uses = 0; closeBrowser(); } }, idleMs); idleTimer.unref?.(); }
+  }
+}
+async function renderOnce(url, kind, { maxMs, allowPrivate }) {
   const b = await browser(allowPrivate);
   const ctx = await b.newContext({ userAgent: UA, locale: 'es-ES', viewport: { width: 1280, height: 1600 }, serviceWorkers: 'block' });
   // Solo hace falta el HTML: no descarga imágenes/video/fuentes (ahorra memoria y red) y, en
