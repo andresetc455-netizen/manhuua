@@ -32,10 +32,10 @@ const toResult = (x, out, t0, page, prevItems = []) => {
   const c = classify(out.diag);
   const seen = new Set(prevItems.map((i) => i.url));
   const items = [...prevItems, ...out.items.filter((i) => i.url && !seen.has(i.url) && seen.add(i.url))];
-  const failed = !items.length && !['ok', 'extraction'].includes(c.state);
+  const failed = !items.length && !['ok', 'extraction'].includes(c.state) && !out.diag?.searchOnly;
   // Hay más solo si la fuente lo dice y la página trajo algo nuevo (evita bucles en sitios que repiten).
   const more = !!out.next && items.length > prevItems.length;
-  return { extId: x.id, state: failed ? 'error' : 'ok', items, label: c.label, kind: c.kind, httpStatus: c.httpStatus, reason: out.diag?.reasons?.[0], ms: Date.now() - t0, page, next: more ? out.next : null, total: out.total, cached: !!out.cached };
+  return { extId: x.id, state: failed ? 'error' : 'ok', items, label: out.diag?.searchOnly ? 'solo búsqueda' : c.label, kind: c.kind, httpStatus: c.httpStatus, reason: out.diag?.reasons?.[0], ms: Date.now() - t0, page, next: more ? out.next : null, total: out.total, cached: !!out.cached };
 };
 const errResult = (x, e, t0, prev) => ({ ...(prev || { items: [], page: 0 }), extId: x.id, state: prev?.items?.length ? 'ok' : 'error', moreError: prev ? e.message : undefined, items: prev?.items || [], label: e.timeout ? 'Sin respuesta' : 'Error', kind: e.timeout ? 'network' : undefined, reason: e.message, ms: Date.now() - t0, next: prev?.next || null });
 

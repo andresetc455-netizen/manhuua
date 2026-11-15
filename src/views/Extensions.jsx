@@ -6,8 +6,9 @@ import { useExtensions, addExtension, updateExtension, removeExtension, checkExt
 import { MD_LANGS, mdOptions } from '../sources/mangadex.js';
 import { STATES, ERROR_KINDS } from '../sources/engine.js';
 import { Icon, Favicon, go } from '../ui.jsx';
+import { PLATFORMS, CLASS_LABEL } from '../sources/platforms.js';
 
-const TYPE = { web: 'Sitio web', api: 'API JSON', catalog: 'Catálogo JSON', manifest: 'Extensión JSON', mangadex: 'Fuente integrada · API oficial' };
+const TYPE = { web: 'Sitio web', api: 'API JSON', catalog: 'Catálogo JSON', manifest: 'Extensión JSON', mangadex: 'Fuente integrada · API oficial', mangaupdates: 'Fuente integrada · API oficial · solo metadatos' };
 const ago = (t) => {
   if (!t) return 'nunca';
   const m = Math.round((Date.now() - t) / 60000);
@@ -31,7 +32,7 @@ function Install() {
       setMsg({ ok: true, text: `Instalada: ${x.name}${x.version ? ` v${x.version}` : ''}. Comprobando…` });
       setUrl(''); setJson('');
       const st = await checkExtension(x.id);
-      setMsg({ ok: st.state === 'ok', text: `${x.name}: ${st.label}${st.works ? ` · ${st.works} obras` : ''}${st.message ? ` · ${st.message}` : ''}` });
+      setMsg({ ok: ['ok', 'metadata'].includes(st.state), text: `${x.name}: ${st.label}${st.works ? ` · ${st.works} obras` : ''}${st.message ? ` · ${st.message}` : ''}` });
     } catch (e) { setMsg({ ok: false, text: e.message }); }
     setBusy(false);
   };
@@ -84,7 +85,7 @@ function Row({ x }) {
     s.httpStatus && `HTTP ${s.httpStatus}`,
     s.ms != null && `${s.ms} ms`,
     s.works != null && st.state !== 'disabled' && `${s.works} obras`,
-    s.total != null && x.type === 'mangadex' && `${s.total} obras en el catálogo`,
+    s.total != null && x.native && `${s.total} ${x.type === 'mangaupdates' ? 'resultados en la búsqueda de prueba' : 'obras en el catálogo'}`,
     s.chapters != null && `${s.chapters} capítulos (1.ª obra)`,
     s.languages?.length && `idiomas (1.ª obra): ${s.languages.slice(0, 8).join(', ')}`,
     `comprobada ${ago(s.at)}`,
@@ -103,11 +104,12 @@ function Row({ x }) {
       {s.message && st.state !== 'ok' && st.state !== 'disabled' && <p className="small ext-msg">{s.message}</p>}
       {s.chapterError && <p className="small ext-msg">Capítulos: {s.chapterError}</p>}
       {x.type === 'mangadex' && <MdOptions x={x} />}
+      {x.metadataOnly && <p className="muted small">Solo metadatos: búsqueda y fichas. MangaUpdates no aloja capítulos; cada ficha enlaza a la obra en su sitio. Sin cuenta ni credenciales.</p>}
       {note && <p className="error small">{note}</p>}
       <div className="row">
         <button className="btn sm" disabled={!!busy || !isEnabled(x)} onClick={() => act('c', () => checkExtension(x.id))}><Icon n="refresh" size={14} /> {busy === 'c' ? 'Comprobando…' : 'Comprobar'}</button>
         {x.native && <button className="btn sm" disabled={!!busy} onClick={() => act('u', async () => { installNative(x.type); setNote(`Fuente integrada: se actualiza con la app (v${x.version}).`); })}><Icon n="down" size={14} /> Actualizar</button>}
-        {x.type === 'mangadex' && <a className="btn sm" href="https://mangadex.org" target="_blank" rel="noreferrer">MangaDex</a>}
+        {x.native && <a className="btn sm" href={x.url} target="_blank" rel="noreferrer">{x.name}</a>}
         {x.type === 'manifest' && x.manifestUrl && <button className="btn sm" disabled={!!busy} onClick={() => act('u', async () => { const r = await refreshExtension(x.id, { confirm: confirmChanges }); setNote(r.changed ? `Actualizada de v${r.from} a v${r.to}.` : 'Ya estaba actualizada.'); })}><Icon n="down" size={14} /> {busy === 'u' ? 'Actualizando…' : 'Actualizar'}</button>}
         <button className="btn sm" onClick={() => updateExtension(x.id, { enabled: !isEnabled(x) })}>{isEnabled(x) ? 'Desactivar' : 'Activar'}</button>
         {isEnabled(x) && <button className="btn sm" onClick={() => go(`/ext/${x.id}`)}>Abrir</button>}
@@ -136,6 +138,39 @@ function MdOptions({ x }) {
   );
 }
 
+const PSTATE = { A: ['ok', 'Integrada'], B: ['metadata', 'Solo metadatos'], C: ['external', 'Lectura externa'], D: ['unauthorized', 'No autorizada'] };
+/** Las 25 plataformas auditadas: clasificación, estado y enlace oficial (sin pedidos a esos sitios). */
+function Platforms({ exts }) {
+  const [open, setOpen] = useState(false);
+  const installed = (p) => exts.some((x) => x.type === p.id);
+  const n = (c) => PLATFORMS.filter((p) => p.cls === c).length;
+  return (
+    <section className="platforms">
+      <h3 className="sec">Plataformas oficiales ({PLATFORMS.length})</h3>
+      <p className="muted small">{n('A')} con integración completa · {n('B')} solo metadatos · {n('C')} con lectura externa (se abren en su sitio oficial) · {n('D')} no integrables. Manhuua no descarga ni muestra contenido de las plataformas sin autorización; el detalle está en docs/FUENTES.md.</p>
+      <button className="btn sm" onClick={() => setOpen(!open)}>{open ? 'Ocultar' : 'Ver las 25 plataformas'}</button>
+      {open && (
+        <ul className="ext-rows">
+          {PLATFORMS.map((p) => {
+            const [st, label] = PSTATE[p.cls];
+            return (
+              <li key={p.id} className="ext-row plat-row">
+                <div className="ext-row-head">
+                  <span className="fav-ph">{p.name[0]}</span>
+                  <span className="grow"><b>{p.name}</b><span className="muted small">{p.cls} · {CLASS_LABEL[p.cls]} · {p.langs}</span></span>
+                  <span className={'st-badge st-' + st}>{p.state === 'native' ? (installed(p) ? `${label} · instalada` : `${label} · disponible`) : label}</span>
+                </div>
+                <p className="small ext-msg">{p.note}</p>
+                <div className="row"><a className="btn sm" href={p.url} target="_blank" rel="noreferrer noopener"><Icon n="globe" size={14} /> Sitio oficial</a></div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export default function Extensions() {
   const exts = useExtensions();
   const [busy, setBusy] = useState(false);
@@ -147,9 +182,10 @@ export default function Extensions() {
         <div className="actions">{exts.length > 0 && <button className="btn sm" disabled={busy} onClick={checkAll}><Icon n="refresh" size={14} /> {busy ? 'Comprobando…' : 'Comprobar todas'}</button>}</div>
       </header>
       <Install />
-      {exts.length > 0 && <p className="muted small">{exts.length} instaladas · {count('ok')} funcionando · {exts.filter((x) => ['blocked', 'notfound', 'conn', 'incompatible', 'limited', 'extraction'].includes(stateOf(x).state)).length} con problemas · {count('disabled')} desactivadas</p>}
+      {exts.length > 0 && <p className="muted small">{exts.length} instaladas · {count('ok') + count('metadata')} funcionando · {exts.filter((x) => ['blocked', 'notfound', 'conn', 'incompatible', 'limited', 'extraction', 'auth', 'unavailable'].includes(stateOf(x).state)).length} con problemas · {count('disabled')} desactivadas</p>}
       <ul className="ext-rows">{exts.map((x) => <Row key={x.id} x={x} />)}</ul>
       {!exts.length && <p className="empty">Todavía no hay extensiones.</p>}
+      <Platforms exts={exts} />
     </div>
   );
 }

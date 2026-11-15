@@ -138,7 +138,8 @@ export function Browse({ onAdd }) {
   const [, bump] = useState(0);
   useEffect(() => onMergesChange(() => bump((n) => n + 1)), []);
   useEffect(() => { if (res && !res.some((r) => r.state === 'loading')) ssSet(SS, { q, res, mode, ran }); }, [res]); // eslint-disable-line
-  const run = (query) => { ctl.current?.abort(); ctl.current = new AbortController(); setMode(query ? 'search' : 'catalog'); setRan(query); setBusy({}); setF(F0); searchAll(exts, query, setRes, { signal: ctl.current.signal }); };
+  // Sin texto (catálogo) no se consultan las fuentes que solo permiten búsqueda (MangaUpdates).
+  const run = (query) => { ctl.current?.abort(); ctl.current = new AbortController(); setMode(query ? 'search' : 'catalog'); setRan(query); setBusy({}); setF(F0); searchAll(query ? exts : exts.filter((x) => x.type !== 'mangaupdates'), query, setRes, { signal: ctl.current.signal }); };
   // Paginación independiente: cada fuente avanza sola y su falla no toca a las demás.
   const more = async (ids) => {
     const sig = ctl.current?.signal;
@@ -165,7 +166,7 @@ export function Browse({ onAdd }) {
   const langs = [...new Set(groups.flatMap((g) => g.languages || []))].sort();
   const au = f.author.trim().toLowerCase();
   let shown = groups.filter((g) => (!f.genre || g.genres.includes(f.genre)) && (!f.status || g.status === f.status) && (!f.source || g.sources.some((s) => s.ext.id === f.source))
-    && (!f.type || g.type === f.type) && (!f.lang || g.languages?.includes(f.lang)) && (!au || `${g.author || ''} ${g.artist || ''}`.toLowerCase().includes(au)));
+    && (!f.type || (f.type === 'webtoon' ? g.webtoon : g.type === f.type)) && (!f.lang || g.languages?.includes(f.lang)) && (!au || `${g.author || ''} ${g.artist || ''}`.toLowerCase().includes(au)));
   if (f.sort === 'az') shown = [...shown].sort((a, b) => a.title.localeCompare(b.title, 'es'));
   if (f.sort === 'upd') shown = [...shown].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
   const loading = res?.some((r) => r.state === 'loading');
@@ -199,7 +200,7 @@ export function Browse({ onAdd }) {
               <select value={f.genre} onChange={(e) => setF({ ...f, genre: e.target.value })} aria-label="Género"><option value="">Todos los géneros</option>{genres.map((g) => <option key={g}>{g}</option>)}</select>
               <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} aria-label="Estado"><option value="">Cualquier estado</option>{statuses.map((g) => <option key={g}>{g}</option>)}</select>
               <select value={f.source} onChange={(e) => setF({ ...f, source: e.target.value })} aria-label="Fuente"><option value="">Todas las fuentes</option>{res.filter((r) => r.items.length).map((r) => <option key={r.extId} value={r.extId}>{extById(r.extId)?.name}</option>)}</select>
-              {types.length > 0 && <select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} aria-label="Tipo"><option value="">Todos los tipos</option>{types.map((t) => <option key={t} value={t}>{TYPE[t] || t}</option>)}</select>}
+              {(types.length > 0 || groups.some((g) => g.webtoon)) && <select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} aria-label="Tipo"><option value="">Todos los tipos</option>{types.map((t) => <option key={t} value={t}>{TYPE[t] || t}</option>)}{groups.some((g) => g.webtoon) && <option value="webtoon">Webtoon (lectura vertical)</option>}</select>}
               {langs.length > 0 && <select value={f.lang} onChange={(e) => setF({ ...f, lang: e.target.value })} aria-label="Idioma"><option value="">Cualquier idioma</option>{langs.map((l) => <option key={l} value={l}>{l}</option>)}</select>}
               <input className="f-author" value={f.author} onChange={(e) => setF({ ...f, author: e.target.value })} placeholder="Autor" aria-label="Autor" />
               <select value={f.sort} onChange={(e) => setF({ ...f, sort: e.target.value })} aria-label="Orden"><option value="rel">Orden de las fuentes</option><option value="az">Alfabético</option><option value="upd">Últimas actualizaciones</option></select>
@@ -212,6 +213,7 @@ export function Browse({ onAdd }) {
                 <Cover src={w.cover} title={w.title} referer={(w.coverExt || w.sources[0].ext).url} hosts={extHosts(w.coverExt || w.sources[0].ext)}>
                   {w.sources.length > 1 && <span className="kind src-count">{w.sources.length} fuentes</span>}
                   {w.rating && w.rating !== 'Apto' && <span className="kind rating">{w.rating}</span>}
+                  {w.metadataOnly && <span className="kind meta-only">solo ficha</span>}
                 </Cover>
                 <span className="card-title">{w.title}</span>
                 <span className="muted small card-sub">{[w.status, w.sources.map((s) => s.ext.name).join(', ')].filter(Boolean).join(' · ')}{w.maybe.length ? ' · posible duplicado' : ''}</span>

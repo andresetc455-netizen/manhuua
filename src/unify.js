@@ -103,6 +103,9 @@ export function groupWorks(entries, ov = overrides) {
       key: src.map((s) => s.key).sort()[0], title, altTitles: alts.slice(0, 20), cover: pick('cover'), coverExt: src.find((s) => s.item.cover)?.ext, description: longest('description'),
       author: pick('author'), artist: pick('artist'), status: pick('status'), type: pick('type'), rating: pick('rating'), year: pick('year'),
       languages: [...new Set(src.flatMap((s) => s.item.languages || []))], genres: [...new Set(src.flatMap((s) => s.item.genres || []))],
+      webtoon: src.some((s) => s.item.webtoon) || undefined, metadataOnly: src.every((s) => s.item.metadataOnly) || undefined,
+      ids: Object.assign({}, ...src.map((s) => s.item.ids || {})),
+      officialLinks: src.flatMap((s) => s.item.officialLinks || []).filter((l, i, a) => a.findIndex((x) => x.url === l.url) === i),
       updatedAt: src.map((s) => s.item.updatedAt).filter(Boolean).sort().at(-1), sources: src, maybe,
     });
   }

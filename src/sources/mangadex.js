@@ -3,6 +3,7 @@
 // cachea y valida MangaDex@Home; acá se limita la concurrencia, se unen pedidos iguales, se respeta
 // el 429 (Retry-After) y se normalizan los datos sin inventar nada. Ver docs/MANGADEX.md.
 import { activeProxy } from './web.js';
+import { officialLinks } from './platforms.js';
 
 export const MD_ID = 'native-mangadex';
 export const MD_IDENTITY = 'native:mangadex';
@@ -32,8 +33,9 @@ const NO_BACKEND = 'MangaDex necesita el backend propio de Manhuua: su API no ac
 const MAX_ACTIVE = 3;
 let active = 0; const queue = [];
 const cache = new Map(); const inflight = new Map();
-let coolUntil = 0;
-export const mdCooling = () => Math.max(0, Math.ceil((coolUntil - Date.now()) / 1000));
+const coolUntil = {}; // servicio → fin de la pausa por 429
+export const mdCooling = (service = 'mangadex') => Math.max(0, Math.ceil(((coolUntil[service] || 0) - Date.now()) / 1000));
+const LABEL = { mangadex: 'MangaDex', mangaupdates: 'MangaUpdates' };
 function slot(signal) {
   return new Promise((res, rej) => {
     const go = () => { if (signal?.aborted) return rej(abortErr()); active++; res(); };
@@ -45,20 +47,21 @@ const release = () => { active--; queue.shift()?.(); };
 const abortErr = () => Object.assign(new Error('Cancelado'), { name: 'AbortError', aborted: true });
 
 /** Una llamada al backend. as: 'json' | 'blob'. Registra el intento en `trace` (diagnóstico). */
-export async function mdCall(route, params = {}, { as = 'json', ttl = 0, signal, trace } = {}) {
-  const base = mdBackend();
-  if (!base) { trace?.push({ via: 'backend MangaDex', ok: false, error: NO_BACKEND, source: 'backend' }); throw Object.assign(new Error(NO_BACKEND), { source: 'backend', noBackend: true }); }
+export async function mdCall(route, params = {}, { as = 'json', ttl = 0, signal, trace, service = 'mangadex' } = {}) {
+  const base = mdBackend(), name = LABEL[service] || service, via = `backend ${name}`;
+  const noBk = service === 'mangadex' ? NO_BACKEND : NO_BACKEND.replace(/MangaDex/g, name);
+  if (!base) { trace?.push({ via, ok: false, error: noBk, source: 'backend' }); throw Object.assign(new Error(noBk), { source: 'backend', noBackend: true }); }
   const qs = new URLSearchParams(Object.entries(params).flatMap(([k, v]) => (Array.isArray(v) ? v.map((x) => [k, x]) : v == null || v === '' ? [] : [[k, String(v)]])));
-  const url = `${base}/mangadex/${route}?${qs}`;
+  const url = `${base}/${service}/${route}?${qs}`;
   const hit = ttl && cache.get(url);
   if (hit && hit.exp > Date.now()) { trace?.push({ via: 'caché', ok: true, status: 200, ms: 0 }); return hit.v; }
-  const wait = mdCooling();
-  if (wait) { const e = Object.assign(new Error(`MangaDex limitó las peticiones: esperá ${wait} s antes de reintentar.`), { status: 429, source: 'site', retryAfter: wait }); trace?.push({ via: 'backend MangaDex', ok: false, status: 429, source: 'site', error: e.message }); throw e; }
+  const wait = mdCooling(service);
+  if (wait) { const e = Object.assign(new Error(`${name} limitó las peticiones: esperá ${wait} s antes de reintentar.`), { status: 429, source: 'site', retryAfter: wait }); trace?.push({ via, ok: false, status: 429, source: 'site', error: e.message }); throw e; }
   const key = as + ' ' + url;
   if (inflight.has(key)) return inflight.get(key);
   const p = (async () => {
     await slot(signal);
-    const t0 = performance.now(); const rec = { via: 'backend MangaDex', ok: false };
+    const t0 = performance.now(); const rec = { via, ok: false };
     try {
       let res;
       try { res = await fetch(url, { signal }); }
@@ -69,7 +72,7 @@ export async function mdCall(route, params = {}, { as = 'json', ttl = 0, signal,
         const own = !!res.headers.get('x-manhuua-error');
         rec.source = res.headers.get('x-manhuua-blocked-url') ? 'policy' : own ? 'backend' : 'site';
         const ra = +res.headers.get('retry-after') || body.retryAfter;
-        if (res.status === 429 && ra) coolUntil = Math.max(coolUntil, Date.now() + Math.min(ra, 900) * 1000);
+        if (res.status === 429 && ra) coolUntil[service] = Math.max(coolUntil[service] || 0, Date.now() + Math.min(ra, 900) * 1000);
         throw Object.assign(new Error(body.error || `HTTP ${res.status}`), { status: res.status, source: rec.source, retryAfter: ra, backend: own, policy: rec.source === 'policy' || undefined });
       }
       const out = as === 'blob' ? await res.blob() : await res.json();
@@ -98,6 +101,17 @@ const pickLang = (o, langs) => { if (!o || typeof o !== 'object') return ''; for
 const plain = (md) => String(md || '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/[*_]{1,3}([^*_]+)[*_]{1,3}/g, '$1').replace(/^-{3,}\s*$/gm, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 4000);
 const rels = (x, t) => (x.relationships || []).filter((r) => r.type === t);
 const names = (x, t) => [...new Set(rels(x, t).map((r) => str(r.attributes?.name, 80)).filter(Boolean))].slice(0, 4).join(', ');
+/** IDs externos que publica MangaDex en attributes.links (sirven para unir la misma obra entre fuentes). */
+export function externalIds(links = {}) {
+  const ids = {};
+  if (/^\d{1,10}$/.test(links?.al || '')) ids.anilist = links.al;
+  if (/^\d{1,10}$/.test(links?.mal || '')) ids.mal = links.mal;
+  // MangaUpdates: el id nuevo (base 36, el de mangaupdates.com/series/<id>) equivale a series_id de su API.
+  // Los ids viejos (solo dígitos) son de otro sistema: no se usan para no unir obras distintas.
+  const mu = links?.mu;
+  if (typeof mu === 'string' && /^[0-9a-z]{4,12}$/.test(mu) && /[a-z]/.test(mu)) { const n = parseInt(mu, 36); if (Number.isSafeInteger(n)) ids.mangaupdates = String(n); }
+  return ids;
+}
 const kindOf = (ol) => Object.entries(MD_TYPES).find(([, l]) => l.includes(ol))?.[0];
 
 /** Obra de MangaDex → obra de Manhuua. */
@@ -117,7 +131,8 @@ export function mdWork(m, langs = MD_DEFAULTS.langs, size = 256) {
     contentRating: a.contentRating, rating: RATING[a.contentRating],
     languages: (a.availableTranslatedLanguages || []).filter(Boolean),
     originalLanguage: a.originalLanguage, type: kindOf(a.originalLanguage),
-    ids: { mangadex: m.id }, link: `https://mangadex.org/title/${m.id}`,
+    ids: { mangadex: m.id, ...externalIds(a.links) }, link: `https://mangadex.org/title/${m.id}`,
+    officialLinks: officialLinks(a.links), webtoon: (a.tags || []).some((t) => t.attributes?.group === 'format' && /long strip|web comic/i.test(t.attributes?.name?.en || '')) || undefined,
     updatedAt: a.updatedAt?.slice(0, 10),
   };
 }

@@ -164,6 +164,7 @@ export function explain(d, what = 'obras') {
 export const STATES = {
   available: 'Disponible', ok: 'Funcionando', blocked: 'Fuente bloqueada', notfound: 'No disponible', limited: 'Limitada',
   conn: 'Error de conexión', incompatible: 'API incompatible', extraction: 'Sin datos reconocibles', disabled: 'Desactivada',
+  auth: 'Autenticación requerida', unavailable: 'API no disponible', metadata: 'Solo metadatos', external: 'Lectura externa', unauthorized: 'No autorizada',
 };
 /** Tipo de error, para no confundir un bloqueo de la fuente con una falla de Manhuua. */
 export const ERROR_KINDS = {
@@ -187,9 +188,11 @@ export function classify(d = {}) {
     if (src === 'backend') return out('conn', 'backend');
     if (st && src !== 'network') {
       const anti = d.challenge || fail.challenge;
+      if (st === 401 && !anti) return out('auth', 'source');
       if ([401, 403, 451].includes(st) || (st === 503 && anti)) return out('blocked', anti ? 'antibot' : 'source');
       if ([404, 410].includes(st)) return out('notfound', 'source');
       if (st === 429) return out('limited', 'source');
+      if (st >= 500 && src !== 'backend') return out('unavailable', 'source');
       return out('conn', 'source');
     }
     const cors = (d.attempts || []).some((a) => /CORS/.test(a.error || '')) || /CORS/.test(d.httpError || '');

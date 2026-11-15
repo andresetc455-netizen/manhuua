@@ -79,6 +79,28 @@ export function MdCredit({ d }) {
   if (!d?.ids?.mangadex) return null;
   return <p className="muted small md-credit">Datos e imágenes de <a href={d.link} target="_blank" rel="noreferrer">MangaDex</a>; las traducciones son de sus grupos (indicados en cada capítulo).{d.rating && d.contentRating !== 'safe' ? ` Clasificación: ${d.rating}.` : ''}</p>;
 }
+/** Lectura oficial: enlaces a las plataformas oficiales que informa la fuente (se abren en su sitio). */
+export function OfficialLinks({ d }) {
+  const links = d?.officialLinks || [];
+  if (!links.length) return null;
+  return (
+    <div className="official-links">
+      <span className="small muted">Lectura oficial (se abre en la plataforma):</span>
+      {links.map((l) => <a key={l.url} className="btn sm" href={l.url} target="_blank" rel="noreferrer noopener"><Icon n="globe" size={14} /> {l.platform} · {l.kind}</a>)}
+    </div>
+  );
+}
+/** Fuente de solo metadatos (MangaUpdates): lo dice claro y enlaza a la ficha en su sitio. */
+export function MetaOnly({ d, ext }) {
+  if (!d?.metadataOnly) return null;
+  return (
+    <div className="meta-only-box">
+      <p className="small">Solo metadatos: {ext?.name || 'esta fuente'} es una base de datos de obras y no aloja capítulos. Para leer, usá la lectura oficial o una fuente con lectura autorizada (por ejemplo MangaDex).</p>
+      {d.publishers?.length > 0 && <p className="small muted">Editoriales: {d.publishers.map(([n, t]) => (t ? `${n} (${t})` : n)).join(' · ')}</p>}
+      <div className="row">{d.link && <a className="btn sm" href={d.link} target="_blank" rel="noreferrer noopener"><Icon n="globe" size={14} /> Ver en {ext?.name || 'el sitio'}</a>}</div>
+    </div>
+  );
+}
 /** Selector de idioma de lectura de MangaDex (idiomas disponibles de la obra). */
 export function MdLangPick({ ext, d, value, onChange }) {
   if (ext?.type !== 'mangadex' || !d?.languages?.length) return null;
@@ -119,7 +141,7 @@ export function ExtensionHome({ extId }) {
       setPage(r.nextPage ? r.nextPage - 1 : 1);
       setDiag(r.diag);
       setState('ok');
-      if (!append && !opts.query) recordStatus(ext, r.diag);
+      if (!append && !opts.query && !r.diag.searchOnly) recordStatus(ext, r.diag);
     } catch (e) { if (!e.aborted) { setErr(e.message); setState('error'); } }
   };
   useEffect(() => { ext && isEnabled(ext) && load(); return () => ctl.current?.abort(); }, [extId]); // eslint-disable-line
@@ -137,13 +159,14 @@ export function ExtensionHome({ extId }) {
       </header>
       <form className="search wide" onSubmit={(e) => { e.preventDefault(); load(q ? { query: q } : {}); }}>
         <Icon n="search" size={16} />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={md ? 'Buscar por título, enlace o ID de MangaDex' : ext.searchUrl ? 'Buscar en el sitio' : 'Filtrar resultados'} />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={md ? 'Buscar por título, enlace o ID de MangaDex' : ext.type === 'mangaupdates' ? 'Buscar por título en MangaUpdates' : ext.searchUrl ? 'Buscar en el sitio' : 'Filtrar resultados'} />
       </form>
       {md && <MdFilters ext={ext} f={f} setF={setF} onApply={() => load(q ? { query: q } : {})} />}
       {md && <p className="muted small md-credit">Catálogo de <a href="https://mangadex.org" target="_blank" rel="noreferrer">MangaDex</a> (API oficial). Contenido +18 explícito excluido{mdOptions(ext).adult ? '' : '; erótico oculto (se activa en Extensiones)'}.</p>}
       <NoProxy />
       {state === 'error' && <p className="error">{err}</p>}
-      {state !== 'loading' && <DiagPanel ext={ext} diag={diag} open={diagOpen} onToggle={() => setDiagOpen(!diagOpen)} />}
+      {diag?.searchOnly && <p className="muted">{diag.reasons[0]} Es una fuente de solo metadatos: las fichas no tienen capítulos.</p>}
+      {state !== 'loading' && !diag?.searchOnly && <DiagPanel ext={ext} diag={diag} open={diagOpen} onToggle={() => setDiagOpen(!diagOpen)} />}
       <div className="grid">
         {items.map((it) => (
           <a key={it.url} className="card" href={`#/ext/${ext.id}/s/${encodeURIComponent(it.url)}`} onClick={() => sessionStorage.setItem('mh.pick', JSON.stringify(it))}>
@@ -234,12 +257,14 @@ export function RemoteSeries({ extId, url }) {
                 {d.author && <span><b>Autor:</b> {d.author}</span>}
                 {d.artist && d.artist !== d.author && <span><b>Arte:</b> {d.artist}</span>}
                 {d.status && <span className={'status-chip' + (d.status === 'Finalizado' ? ' fin' : '')}>{d.status}</span>}
-                <span>{d.chapters.length} capítulos · {ext.name}</span>
+                <span>{d.metadataOnly ? 'solo ficha' : `${d.chapters.length} capítulos`} · {ext.name}</span>{d.year && <span>{d.year}</span>}{d.typeLabel && <span>{d.typeLabel}</span>}
               </div>
               {d.genres?.length > 0 && <div className="genres">{d.genres.map((g) => <span key={g}>{g}</span>)}</div>}
               {d.altTitles?.length > 0 && <p className="muted small alt-titles">También: {d.altTitles.slice(0, 4).join(' · ')}</p>}
               {d.description && <p className="desc">{d.description}</p>}
               <MdCredit d={d} />
+              <OfficialLinks d={d} />
+              <MetaOnly d={d} ext={ext} />
               <div className="row">
                 {first && <button className="btn primary" disabled={!!busy} onClick={() => read(resume || first)}><Icon n="book" size={16} /> {resume ? `Continuar: ${resume.title}` : 'Comenzar a leer'}</button>}
                 {pending.length > 0 && <button className="btn" onClick={() => download(pending)}><Icon n="down" size={16} /> Descargar {pending.length === d.chapters.length ? 'todo' : `${pending.length} faltantes`}</button>}
@@ -247,6 +272,7 @@ export function RemoteSeries({ extId, url }) {
               </div>
             </div>
           </div>
+          {!d.metadataOnly && <>
           <h3 className="sec">Capítulos {d.chapters.length > 0 && <span className="muted small">({d.chapters.length})</span>}</h3>
           <MdLangPick ext={ext} d={d} value={langs?.join(',')} onChange={setLangs} />
           {!d.chapters.length && <DiagBox ext={ext} diag={d.diag} what="Capítulos" startOpen />}
@@ -267,6 +293,8 @@ export function RemoteSeries({ extId, url }) {
             })}
           </ul>
           {d.chapters.length > 0 && d.diag && <DiagBox ext={ext} diag={d.diag} what="Capítulos" />}
+          </>}
+          {d.metadataOnly && d.diag?.httpError && <DiagBox ext={ext} diag={d.diag} what="Ficha" startOpen />}
         </>
       )}
     </div>

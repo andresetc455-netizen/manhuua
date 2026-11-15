@@ -6,6 +6,7 @@ import { loadDoc } from './engine.js';
 import { chaptersFromDoc, seriesMeta, finalize, CH_RE } from './chapters.js';
 import { BACKEND, wakeBackend } from '../backend.js';
 import { mdFetch } from './mangadex.js';
+import { muFetch } from './mangaupdates.js';
 
 let autoProxy = '';
 /** Detecta el proxy del servidor incluido (server/proxy.mjs) si la app se sirve desde él. */
@@ -58,6 +59,7 @@ export function blockedError(from, to, reason = 'host') {
 export async function fetchVia(url, as = 'text', referer, trace, { hosts } = {}) {
   // MangaDex nativo: imágenes internas "md:" que resuelve y valida el backend propio (nunca hotlink).
   if (/^md:/.test(url)) return mdFetch(url, trace);
+  if (/^mu:/.test(url)) return muFetch(url, trace); // portadas de MangaUpdates, siempre por el backend
   // Con "hosts" (extensiones JSON) la petición y sus redirecciones solo pueden ir a esos dominios:
   // el proxy propio lo hace cumplir en cada salto e informa la URL final; en acceso directo no se
   // siguen redirecciones (el navegador no deja ver a dónde van); los proxies públicos no se usan.

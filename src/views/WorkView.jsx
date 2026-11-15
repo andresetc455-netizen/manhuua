@@ -9,7 +9,7 @@ import { followSeries, normUrl } from '../online.js';
 import { linkWorks, splitWorks } from '../unify.js';
 import { updateSeries } from '../library.js';
 import { Icon, Cover, BgCover, Favicon, go } from '../ui.jsx';
-import { DiagBox, MdCredit, MdLangPick, chOrigin } from './Extension.jsx';
+import { DiagBox, MdCredit, MdLangPick, chOrigin, OfficialLinks } from './Extension.jsx';
 
 const fmtDate = (c) => (c.date ? new Date(c.date + 'T12:00:00').toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' }) : c.dateText || '');
 const readWork = (k) => { try { return JSON.parse(sessionStorage.getItem('mh.work:' + k)); } catch { return null; } };
@@ -37,7 +37,7 @@ export default function WorkView({ workKey }) {
     srcs.forEach((s) => {
       if (!isEnabled(s.ext)) return setDet((p) => ({ ...p, [s.key]: { state: 'error', label: 'Desactivada' } }));
       seriesDetail(s.ext, s.item.url, s.item, s.ext.type === 'mangadex' && langs ? { langs } : {})
-        .then((d) => { const c = classify(d.diag); setDet((p) => ({ ...p, [s.key]: d.chapters.length ? { state: 'ok', d } : { state: 'error', d, label: c.state === 'ok' || c.state === 'extraction' ? 'sin capítulos' : c.label } })); })
+        .then((d) => { const c = classify(d.diag); setDet((p) => ({ ...p, [s.key]: d.chapters.length ? { state: 'ok', d } : d.metadataOnly && !d.diag?.httpError ? { state: 'meta', d, label: 'solo ficha (no aloja capítulos)' } : { state: 'error', d, label: c.state === 'ok' || c.state === 'extraction' ? 'sin capítulos' : c.label } })); })
         .catch((e) => setDet((p) => ({ ...p, [s.key]: { state: 'error', label: e.message } })));
     });
   };
@@ -129,6 +129,7 @@ export default function WorkView({ workKey }) {
           {genres.length > 0 && <div className="genres">{genres.map((g) => <span key={g}>{g}</span>)}</div>}
           {desc && <p className="desc">{desc}</p>}
           <MdCredit d={okd.find((x) => x.ids?.mangadex)} />
+          <OfficialLinks d={{ officialLinks: [...okd, work].flatMap((x) => x.officialLinks || []).filter((l, i, a) => a.findIndex((y) => y.url === l.url) === i) }} />
           <div className="row">
             {d?.chapters[0] && <button className="btn primary" disabled={!!busy} onClick={() => read(resume || d.chapters[0])}><Icon n="book" size={16} /> {resume ? `Continuar: ${resume.title}` : 'Comenzar a leer'}</button>}
             {pending.length > 0 && <button className="btn" onClick={() => download(pending)}><Icon n="down" size={16} /> Descargar {pending.length === d.chapters.length ? 'todo' : `${pending.length} faltantes`}</button>}
@@ -148,6 +149,7 @@ export default function WorkView({ workKey }) {
                 <Favicon ext={s.ext} /><b>{s.ext.name}</b>
                 <span className="muted small">{x.state === 'loading' ? 'consultando…' : x.state === 'ok' ? `${x.d.chapters.length} capítulos${x.d.chapters.at(-1)?.number != null ? ` · último ${x.d.chapters.at(-1).number}` : ''}` : x.label}</span>
               </button>
+              {x.state === 'meta' && x.d.link && <a className="btn sm" href={x.d.link} target="_blank" rel="noreferrer noopener">Ver ficha</a>}
               {srcs.length > 1 && <button className="btn sm" title="Esta ficha no es la misma obra" onClick={() => detach(s)}>Separar</button>}
             </li>
           );
