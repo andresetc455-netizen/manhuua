@@ -2,7 +2,7 @@
 // Novelas propias: TXT y EPUB a párrafos de texto plano (sin HTML), capítulos, EPUB con DRM rechazado.
 import { describe, it, expect } from 'vitest';
 import JSZip from 'jszip';
-import { splitText, htmlToParas, parseEpub, parseNovels, TEXT_TYPE } from './importers.js';
+import { splitText, htmlToParas, parseEpub, parseNovels, readText, splitLong, MAX_PARAS, TEXT_TYPE } from './importers.js';
 
 const epub = async ({ drm = false } = {}) => {
   const z = new JSZip();
@@ -45,5 +45,20 @@ describe('novelas propias', () => {
     expect(g.map((x) => [x.series, x.kind, x.number])).toEqual([['Mi novela', 'text', 1], ['Mi novela', 'text', 2], ['otra', 'text', 3]]);
     expect(g[0].pages[0].type).toBe(TEXT_TYPE);
     expect(JSON.parse(await g[0].pages[0].text()).paras[0]).toEqual({ t: 'Capítulo 1', h: 1 });
+  });
+  it('TXT en Latin-1 (Windows-1252) se lee sin caracteres rotos; UTF-8 con BOM también', async () => {
+    const latin = new Uint8Array([0x43, 0x61, 0x70, 0xed, 0x74, 0x75, 0x6c, 0x6f, 0x20, 0xf1]); // "Capítulo ñ"
+    expect(await readText(new File([latin], 'a.txt'))).toBe('Capítulo ñ');
+    expect((await readText(new File(['\uFEFFHola é'], 'b.txt'))).replace(/^\uFEFF/, '')).toBe('Hola é');
+  });
+  it('capítulo enorme: se parte en partes de como máximo MAX_PARAS párrafos, sin perder texto', async () => {
+    const big = { title: 'Libro', paras: Array.from({ length: 1000 }, (_, i) => ({ t: 'p' + i })) };
+    const parts = splitLong([big]);
+    expect(parts).toHaveLength(Math.ceil(1000 / MAX_PARAS));
+    expect(parts.every((p) => p.paras.length <= MAX_PARAS)).toBe(true);
+    expect(parts.flatMap((p) => p.paras)).toEqual(big.paras);
+    expect(parts[0].title).toMatch(/parte 1 de/);
+    const g = await parseNovels([new File([Array.from({ length: 900 }, (_, i) => 'Línea ' + i).join('\n\n')], 'largo.txt')]);
+    expect(g).toHaveLength(3); expect(g.map((x) => x.number)).toEqual([1, 2, 3]);
   });
 });

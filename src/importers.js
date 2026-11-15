@@ -120,6 +120,24 @@ export async function parseEpub(file) {
   return { title: meta('title'), author: meta('creator'), chapters };
 }
 
+/** Texto de un archivo: UTF-8 (con o sin BOM) o, si no es UTF-8 válido, Windows-1252 (Latin-1). */
+export async function readText(file) {
+  const buf = await file.arrayBuffer();
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+  catch { return new TextDecoder('windows-1252').decode(buf); }
+}
+
+// Un capítulo enorme (un TXT sin encabezados, por ejemplo) se parte en partes para no crear
+// decenas de miles de nodos en el lector.
+export const MAX_PARAS = 400;
+export function splitLong(chapters) {
+  return chapters.flatMap((c) => {
+    if (c.paras.length <= MAX_PARAS) return [c];
+    const n = Math.ceil(c.paras.length / MAX_PARAS);
+    return Array.from({ length: n }, (_, k) => ({ title: `${c.title} (parte ${k + 1} de ${n})`, paras: c.paras.slice(k * MAX_PARAS, (k + 1) * MAX_PARAS) }));
+  });
+}
+
 /** Archivos de novela → grupos con el mismo formato que parseFiles (pages = [Blob de texto]). */
 export async function parseNovels(files) {
   const out = [];
@@ -127,7 +145,8 @@ export async function parseNovels(files) {
     const name = f.name.replace(/\.[^.]+$/, '');
     let book;
     if (/\.epub$/i.test(f.name)) book = await parseEpub(f);
-    else book = { title: guessSeries(name), chapters: splitText(await f.text(), name) };
+    else book = { title: guessSeries(name), chapters: splitText(await readText(f), name) };
+    book.chapters = splitLong(book.chapters);
     book.chapters.forEach((c, i) => out.push({ title: c.title, number: book.chapters.length > 1 ? i + 1 : guessNumber(name), series: book.title || name, author: book.author, kind: 'text', pages: [textBlob(c.title, c.paras)] }));
   }
   return out;
