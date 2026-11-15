@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDb, getAll } from '../db.js';
 import { checkAllUpdates } from '../downloads.js';
 import { useExtensions, isEnabled, extHosts } from '../sources/extensions.js';
-import { searchAll } from '../sources/multi.js';
+import { searchAll, searchMore, clearSearchCache } from '../sources/multi.js';
 import { groupWorks, onMergesChange, getMerges } from '../unify.js';
 import { stateOf } from './Extensions.jsx';
 import { Icon, Cover, Favicon, go } from '../ui.jsx';
@@ -113,6 +113,7 @@ export function History() {
 }
 
 const SS = 'mh.browse';
+const TYPE = { manga: 'Manga', manhwa: 'Manhwa', manhua: 'Manhua', novel: 'Novela', novela: 'Novela' };
 const ssGet = (k) => { try { return JSON.parse(sessionStorage.getItem(k)); } catch { return null; } };
 const ssSet = (k, v) => { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch {} };
 
@@ -129,13 +130,26 @@ export function Browse({ onAdd }) {
   const [q, setQ] = useState(saved?.q || '');
   const [res, setRes] = useState(saved?.res || null); // [{extId, state, items, label, reason}]
   const [mode, setMode] = useState(saved?.mode || '');
+  const [ran, setRan] = useState(saved?.ran || ''); // consulta de los resultados mostrados
+  const [busy, setBusy] = useState({}); // extId → cargando la página siguiente
   const F0 = { genre: '', status: '', source: '', sort: 'rel', type: '', lang: '', author: '' };
   const [f, setF] = useState(F0);
   const ctl = useRef(null);
   const [, bump] = useState(0);
   useEffect(() => onMergesChange(() => bump((n) => n + 1)), []);
-  useEffect(() => { if (res && !res.some((r) => r.state === 'loading')) ssSet(SS, { q, res, mode }); }, [res]); // eslint-disable-line
-  const run = (query) => { ctl.current?.abort(); ctl.current = new AbortController(); setMode(query ? 'search' : 'catalog'); setF(F0); searchAll(exts, query, setRes, { signal: ctl.current.signal }); };
+  useEffect(() => { if (res && !res.some((r) => r.state === 'loading')) ssSet(SS, { q, res, mode, ran }); }, [res]); // eslint-disable-line
+  const run = (query) => { ctl.current?.abort(); ctl.current = new AbortController(); setMode(query ? 'search' : 'catalog'); setRan(query); setBusy({}); setF(F0); searchAll(exts, query, setRes, { signal: ctl.current.signal }); };
+  // Paginación independiente: cada fuente avanza sola y su falla no toca a las demás.
+  const more = async (ids) => {
+    const sig = ctl.current?.signal;
+    await Promise.all(ids.map(async (id) => {
+      const x = extById(id), prev = res.find((r) => r.extId === id);
+      if (!x || !prev?.next || busy[id]) return;
+      setBusy((b) => ({ ...b, [id]: true }));
+      try { const r = await searchMore(x, prev, ran, { signal: sig }); if (!sig?.aborted) setRes((cur) => cur.map((c) => (c.extId === id ? r : c))); }
+      catch {} finally { if (!sig?.aborted) setBusy((b) => ({ ...b, [id]: false })); }
+    }));
+  };
   useEffect(() => () => ctl.current?.abort(), []);
   const search = (e) => { e.preventDefault(); if (!q.trim()) { setRes(null); sessionStorage.removeItem(SS); return; } run(q.trim()); };
   const extById = (id) => all.find((x) => x.id === id);
@@ -172,8 +186,12 @@ export function Browse({ onAdd }) {
           <div className="src-strip">
             {res.map((r) => { const x = extById(r.extId); if (!x) return null; return (
               <span key={r.extId} className={'src-pill ' + r.state} title={r.reason || ''}>
-                <Favicon ext={x} /> {x.name}: {r.state === 'loading' ? 'buscando…' : r.state === 'ok' ? `${r.items.length} ${r.items.length === 1 ? 'obra' : 'obras'}` : r.label}
+                <Favicon ext={x} /> {x.name}: {r.state === 'loading' ? 'buscando…' : r.state === 'ok' ? `${r.items.length}${r.total ? ` de ${r.total}` : ''} ${r.items.length === 1 ? 'obra' : 'obras'}` : r.label}
+                {r.next && <button type="button" className="link-btn" disabled={busy[r.extId]} onClick={() => more([r.extId])}>{busy[r.extId] ? 'cargando…' : 'más'}</button>}
+                {r.moreError && <span className="muted"> · página siguiente: {r.moreError}</span>}
               </span>); })}
+            {res.filter((r) => r.next).length > 1 && <button type="button" className="btn sm" onClick={() => more(res.filter((r) => r.next).map((r) => r.extId))}>Más de todas</button>}
+            {!loading && <button type="button" className="icon-btn" title="Volver a consultar sin caché" onClick={() => { clearSearchCache(); run(ran); }}><Icon n="refresh" size={16} /></button>}
           </div>
           {res.some((r) => r.state === 'error') && <p className="muted small">Las fuentes con error no afectan a las demás. Detalle en <a href="#/extensions">Extensiones</a>.</p>}
           {groups.length > 0 && (
@@ -181,7 +199,7 @@ export function Browse({ onAdd }) {
               <select value={f.genre} onChange={(e) => setF({ ...f, genre: e.target.value })} aria-label="Género"><option value="">Todos los géneros</option>{genres.map((g) => <option key={g}>{g}</option>)}</select>
               <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} aria-label="Estado"><option value="">Cualquier estado</option>{statuses.map((g) => <option key={g}>{g}</option>)}</select>
               <select value={f.source} onChange={(e) => setF({ ...f, source: e.target.value })} aria-label="Fuente"><option value="">Todas las fuentes</option>{res.filter((r) => r.items.length).map((r) => <option key={r.extId} value={r.extId}>{extById(r.extId)?.name}</option>)}</select>
-              {types.length > 0 && <select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} aria-label="Tipo"><option value="">Manga, manhwa y manhua</option>{types.map((t) => <option key={t} value={t}>{t[0].toUpperCase() + t.slice(1)}</option>)}</select>}
+              {types.length > 0 && <select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })} aria-label="Tipo"><option value="">Todos los tipos</option>{types.map((t) => <option key={t} value={t}>{TYPE[t] || t}</option>)}</select>}
               {langs.length > 0 && <select value={f.lang} onChange={(e) => setF({ ...f, lang: e.target.value })} aria-label="Idioma"><option value="">Cualquier idioma</option>{langs.map((l) => <option key={l} value={l}>{l}</option>)}</select>}
               <input className="f-author" value={f.author} onChange={(e) => setF({ ...f, author: e.target.value })} placeholder="Autor" aria-label="Autor" />
               <select value={f.sort} onChange={(e) => setF({ ...f, sort: e.target.value })} aria-label="Orden"><option value="rel">Orden de las fuentes</option><option value="az">Alfabético</option><option value="upd">Últimas actualizaciones</option></select>

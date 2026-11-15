@@ -385,3 +385,6 @@ input[type=range] { accent-color: var(--accent); width: 100%; }
 .md-credit { margin: 6px 0; }
 .md-lang { display: inline-flex; gap: 6px; align-items: center; margin: 0 0 8px; }
 .kind.rating { left: auto; right: 6px; background: #b4232c; color: #fff; }
+.link-btn { background: none; border: 0; padding: 0 0 0 6px; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
+.link-btn:disabled { color: var(--muted); cursor: default; text-decoration: none; }
+

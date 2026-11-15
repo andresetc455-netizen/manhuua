@@ -277,7 +277,7 @@ export async function browse(ext, { url, query, page = 1, filters, signal } = {}
     return { items, next, nextPage: page + 1, diag };
   }
   let target = url || ext.url;
-  if (query && ext.searchUrl) target = pageOf(ext.searchUrl, 1, query);
+  if (query && ext.searchUrl && !url) target = pageOf(ext.searchUrl, 1, query);
   let res, diag;
   try {
     const r = await loadDoc(target, { kind: 'catalog', count: (h, u) => listSeries(h, u, { urlTemplate: ext.itemUrl }).items.length });
