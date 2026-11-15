@@ -177,7 +177,7 @@ export default function SeriesView({ id }) {
             <li key={c.id} className={p?.done ? 'read' : ''}>
               <a href={`#/r/${c.id}`}>
                 <span className="ch-title">{c.title}</span>
-                <span className="muted small">{c.online ? 'en línea' : `${c.pageCount} págs.`}{p && !p.done ? ` · pág. ${p.page + 1}` : ''}{c.id === s.lastChapterId ? ' · último' : ''}</span>
+                <span className="muted small">{c.online ? 'en línea' : `${c.pageCount} págs.`}{c.language ? ` · ${c.language}` : ''}{c.group ? ` · ${c.group}` : ''}{p && !p.done ? ` · pág. ${p.page + 1}` : ''}{c.id === s.lastChapterId ? ' · último' : ''}</span>
               </a>
               <button className={'icon-btn' + (p?.done ? ' accent' : '')} title={p?.done ? 'Marcar no leído' : 'Marcar leído'} onClick={() => markChapters([c], !p?.done)}><Icon n="check" /></button>
               {c.online && c.url && <button className="icon-btn" title="Descargar para leer sin conexión" onClick={() => enqueue({ url: c.url, title: c.title, number: c.number, series: s.title, seriesId: s.id, extId: c.sourceId || s.extId, sourceUrl: /^https?:/.test(s.sourceUrl || '') ? s.sourceUrl : undefined, images: c.remotePages && !c.fetchedAt ? c.remotePages : undefined })}><Icon n="down" size={18} /></button>}

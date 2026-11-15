@@ -323,7 +323,7 @@ export default function Reader({ chapterId }) {
       <div className="reader">
         <header className="r-top">
           <button className="icon-btn" onClick={back} aria-label="Volver"><Icon n="back" /></button>
-          <div className="r-title"><b>{st.series?.title}</b><span>{st.chapter.title}</span></div>
+          <div className="r-title"><b>{st.series?.title}</b><span>{st.chapter.title}{st.chapter.group ? ` · ${st.chapter.group}` : ""}{/^md:/.test(st.chapter.url || "") ? " · MangaDex" : ""}</span></div>
           {srcSelect}
         </header>
         <div className="r-state">
@@ -349,6 +349,7 @@ export default function Reader({ chapterId }) {
   const endBox = (
     <div className="chapter-end">
       <p>Fin de <b>{st.chapter.title}</b></p>
+      {/^md:/.test(st.chapter.url || "") && <p className="muted small">Traducción: {st.chapter.group || "sin grupo"} · vía <a href="https://mangadex.org" target="_blank" rel="noreferrer">MangaDex</a></p>}
       {next ? <button className="btn primary" onClick={(e) => { e.stopPropagation(); open(next); }}>Siguiente: {next.title}</button>
             : <button className="btn" onClick={(e) => { e.stopPropagation(); back(); }}>No hay más capítulos · Volver</button>}
     </div>
@@ -358,7 +359,7 @@ export default function Reader({ chapterId }) {
     <div className="reader">
       <header className={'r-top' + (ui ? '' : ' hide')}>
         <button className="icon-btn" onClick={back} aria-label="Volver"><Icon n="back" /></button>
-        <div className="r-title"><b>{st.series?.title}</b><span>{st.chapter.title}</span></div>
+        <div className="r-title"><b>{st.series?.title}</b><span>{st.chapter.title}{st.chapter.group ? ` · ${st.chapter.group}` : ""}{/^md:/.test(st.chapter.url || "") ? " · MangaDex" : ""}</span></div>
         {srcSelect}
         <button className={'icon-btn' + (trOn ? ' accent' : '')} title="Traducir (inglés → español)" onClick={toggleTr}
           onContextMenu={(e) => { e.preventDefault(); if (confirm('¿Rehacer la traducción de este capítulo?')) clearTranslations(st.chapter.id).then(() => { setTr({}); setTrOn(false); setTimeout(() => setTrOn(true)); }); }}>

@@ -68,7 +68,7 @@ async function process(job) {
   if (existing.some((c) => c.url === job.url && !c.online)) return set({ status: 'omitido', error: 'Ya estaba descargado' });
 
   let { images, title, number } = job;
-  if (!images && /^mf:/.test(job.url)) images = await chapterImages(job.url, job.extId);
+  if (!images && /^(mf|md):/.test(job.url)) images = await chapterImages(job.url, job.extId);
   if (!images) {
     const info = await analyze(job.url);
     if (info.kind !== 'chapter') throw new Error('No se encontraron páginas en la URL');

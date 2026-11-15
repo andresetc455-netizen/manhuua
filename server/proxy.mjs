@@ -1,5 +1,6 @@
 // Servidor de Manhuua: proxy CORS (/proxy?url=&referer=), renderizador (/render?url=&kind=),
 // estado (/health) y, si existe dist/, la app compilada.
+// MangaDex nativo: /mangadex/{api,chapter,page,cover,status} (server/mangadex.mjs).
 // Local:  npm run serve  (PORT=8787). Producción (Render): ver Dockerfile y DEPLOY.md.
 // Configuración por variables de entorno: ver server/security.mjs (loadConfig) y .env.example.
 import http from 'node:http';
@@ -7,6 +8,7 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { render, renderAvailable, closeBrowser } from './render.mjs';
+import { createMangadex, mdConfig } from './mangadex.mjs';
 import { loadConfig, originAllowed, assertPublicUrl, rateLimiter, clientIp, readLimited, limiter, safeRequest, parseHostPolicy, hostAllowed } from './security.mjs';
 
 const C = loadConfig();
@@ -14,13 +16,14 @@ const DIST = path.resolve(import.meta.dirname, '../dist');
 const STATIC = C.serveStatic && existsSync(DIST);
 const UA = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36';
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon' };
-const limits = { proxy: rateLimiter(C.proxyPerMin), render: rateLimiter(C.renderPerMin) };
+const limits = { proxy: rateLimiter(C.proxyPerMin), render: rateLimiter(C.renderPerMin), mangadex: rateLimiter(C.proxyPerMin) };
 const renderSlot = limiter(C.renderConcurrency, C.renderQueue);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
+const MD = createMangadex({ cfg: mdConfig(process.env, { allowPrivate: C.allowPrivate }), allowPrivate: C.allowPrivate, timeoutMs: C.fetchTimeoutMs, log });
 
 function corsHeaders(req) {
   const o = req.headers.origin;
-  const expose = { 'access-control-expose-headers': 'x-final-url, x-manhuua-error, x-manhuua-blocked-url, x-manhuua-blocked-reason, x-upstream-server, x-upstream-challenge, retry-after' };
+  const expose = { 'access-control-expose-headers': 'x-final-url, x-manhuua-error, x-manhuua-blocked-url, x-manhuua-blocked-reason, x-upstream-server, x-upstream-challenge, x-upstream, retry-after' };
   if (!C.origins.length) return { 'access-control-allow-origin': '*', ...expose };
   return o && originAllowed(o, C.origins) ? { 'access-control-allow-origin': o, vary: 'Origin', ...expose } : { vary: 'Origin' };
 }
@@ -104,7 +107,7 @@ async function serveStatic(u, res) {
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
   const cors = corsHeaders(req);
-  const api = u.pathname.endsWith('/proxy') ? 'proxy' : u.pathname.endsWith('/render') ? 'render' : u.pathname.endsWith('/health') ? 'health' : null;
+  const api = /\/mangadex\/[a-z]+$/.test(u.pathname) ? 'mangadex' : u.pathname.endsWith('/proxy') ? 'proxy' : u.pathname.endsWith('/render') ? 'render' : u.pathname.endsWith('/health') ? 'health' : null;
   try {
     if (req.method === 'OPTIONS') return send(res, 204, { ...cors, 'access-control-allow-methods': 'GET, OPTIONS', 'access-control-allow-headers': '*', 'access-control-max-age': '86400' });
     // Origen no permitido: se responde legible para que la app explique qué configurar (no expone datos).
@@ -114,6 +117,7 @@ const server = http.createServer(async (req, res) => {
     if (api) {
       const rl = limits[api](clientIp(req, C.trustProxy));
       if (!rl.ok) return sendJson(res, 429, cors, { error: 'Demasiadas peticiones, esperá un momento' }, { 'retry-after': String(rl.retryAfter), 'x-manhuua-error': '1' });
+      if (api === 'mangadex') return await MD.handle(req, u, res, cors, send);
       return api === 'proxy' ? await proxy(req, u, res, cors) : await renderRoute(req, u, res, cors);
     }
     if (STATIC) return await serveStatic(u, res);

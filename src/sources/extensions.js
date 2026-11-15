@@ -7,6 +7,7 @@ import { mBrowse, mDetail, mPages, validateManifest, fetchManifest, isManifest, 
 import { itemsFromJson, embeddedJson } from './jsonwalk.js';
 import { chaptersFromJson, chaptersFromDoc, nextChaptersPage, nextJsonPage, metaFromJson, finalize } from './chapters.js';
 import { catalogSource } from './catalog.js';
+import { MD_ID, MD_IDENTITY, MD_HOSTS, MD_DEFAULTS, mdExtensionBase, mdBrowse, mdDetail, mdPages, isMd } from './mangadex.js';
 
 const KEY = 'manhuua.extensions';
 const subs = new Set();
@@ -30,6 +31,7 @@ export function normDomain(url) {
 }
 const manifestIdentity = (m) => `manifest:${m.id}@${normDomain(m.baseUrl)}`;
 export function identityOf(x) {
+  if (x.type === 'mangadex') return MD_IDENTITY;
   if (x.manifest?.id) return manifestIdentity(x.manifest);
   try { const u = new URL(x.url); return `${x.type}:${u.protocol}//${u.host.toLowerCase()}${u.pathname.replace(/\/+$/, '')}${u.search}`; } catch { return `${x.type}:${x.url}`; }
 }
@@ -50,6 +52,7 @@ export const isEnabled = (x) => x.enabled !== false;
  */
 export const extensionForUrl = (url = '', fallbackId) => {
   if (fallbackId) return getExtension(fallbackId);
+  if (isMd(url)) return list.find((e) => e.type === 'mangadex');
   if (!/^mf:/.test(url)) return undefined;
   const c = list.filter((e) => e.manifest?.id === url.slice(3).split('/')[0]);
   return c.length === 1 ? c[0] : undefined;
@@ -129,6 +132,21 @@ export async function refreshExtension(id, { confirm } = {}) {
   if (errs.length) throw new Error('Extensión inválida: ' + errs.join(' '));
   const ext = await applyUpdate(x, m, x.manifestUrl, confirm);
   return { ext, changed: from !== ext.version || normDomain(m.baseUrl) !== normDomain(x.manifest.baseUrl), from, to: ext.version };
+}
+
+/**
+ * Fuentes integradas (no hace falta pegar JSON). Reinstalar recupera el mismo id local, así la
+ * biblioteca (obras, capítulos, progreso, descargas) vuelve a quedar asociada sin duplicar.
+ */
+export const NATIVE = { mangadex: { name: 'MangaDex', identity: MD_IDENTITY, id: MD_ID, base: mdExtensionBase, options: MD_DEFAULTS, about: 'API oficial y pública. Catálogo, fichas, capítulos por idioma y grupo, y lectura en línea por MangaDex@Home a través del backend propio. Contenido de MangaDex y de sus grupos de traducción.' } };
+export function installNative(key) {
+  const n = NATIVE[key];
+  if (!n) throw new Error('Fuente integrada desconocida.');
+  const prev = list.find((e) => identityOf(e) === n.identity);
+  if (prev) { updateExtension(prev.id, { ...n.base() }); return getExtension(prev.id); }
+  const ext = { id: stableId(n.identity, n.id), ...n.base(), options: { ...n.options }, enabled: true, addedAt: Date.now(), status: { state: 'available', at: Date.now() } };
+  save([...list, ext]);
+  return ext;
 }
 
 export async function addExtension({ url, name, searchUrl, json, confirm }) {
@@ -235,7 +253,8 @@ export function listSeries(html, pageUrl, { urlTemplate } = {}) {
 const pageOf = (tpl, page, q = '') => tpl.replace('{page}', page).replace('{q}', encodeURIComponent(q));
 
 /** Navega una extensión: página inicial, siguiente página o búsqueda. Devuelve {items, next, diag}. */
-export async function browse(ext, { url, query, page = 1 } = {}) {
+export async function browse(ext, { url, query, page = 1, filters, signal } = {}) {
+  if (ext.type === 'mangadex') return mdBrowse(ext, { query, page, filters, signal });
   if (ext.type === 'manifest') return mBrowse(ext, { query, page });
   if (ext.type === 'catalog') {
     const items = await catalogSource(ext).search(query || '');
@@ -287,7 +306,8 @@ const MAX_PAGES = 20;
  * completa de capítulos (HTML, datos embebidos, API JSON; sigue la paginación de la lista).
  * Nunca inventa capítulos: si la fuente no los da, devuelve la lista vacía con el diagnóstico.
  */
-export async function seriesDetail(ext, url, fallback = {}) {
+export async function seriesDetail(ext, url, fallback = {}, opts = {}) {
+  if (ext.type === 'mangadex') return mdDetail(ext, url, fallback, opts);
   if (ext.type === 'manifest') return mDetail(ext, url, fallback);
   if (ext.type === 'catalog') {
     const id = url.replace(/^catalog:/, '');
@@ -347,8 +367,13 @@ export async function seriesDetail(ext, url, fallback = {}) {
 
 /** Imágenes de un capítulo de una extensión JSON (manifiesto). null si no corresponde. */
 export async function chapterImages(url, extId) {
-  if (!/^mf:/.test(url || '')) return null;
+  if (!/^(mf|md):/.test(url || '')) return null;
   const ext = extensionForUrl(url, extId);
+  if (isMd(url)) {
+    if (ext?.type !== 'mangadex') throw new Error('MangaDex ya no está instalada. Los capítulos descargados se siguen leyendo; para leer en línea volvé a instalarla en Extensiones.');
+    if (!isEnabled(ext)) throw new Error('MangaDex está desactivada. Activala en Extensiones para leer en línea.');
+    return mdPages(ext, url);
+  }
   if (!ext || ext.type !== 'manifest') throw new Error('La extensión de este capítulo ya no está instalada. Los capítulos descargados se siguen leyendo; para leer en línea volvé a instalarla.');
   if (!isEnabled(ext)) throw new Error(`La extensión "${ext.name}" está desactivada. Activala en Extensiones para leer en línea.`);
   return mPages(ext, url);
@@ -376,7 +401,7 @@ export async function checkExtension(id) {
   if (r.items.length) {
     try {
       const d = await seriesDetail(ext, r.items[0].url, r.items[0]);
-      extra = { chapters: d.chapters.length, sample: r.items[0].title };
+      extra = { chapters: d.chapters.length, sample: r.items[0].title, ...(d.languages ? { languages: d.languages.slice(0, 40) } : {}), ...(r.total != null ? { total: r.total } : {}) };
       if (!d.chapters.length) { const c = classify(d.diag); extra.chapterError = `${c.label}: ${d.diag.reasons?.[0] || ''}`; }
     } catch (e) { extra = { chapters: 0, chapterError: e.message }; }
   }
@@ -385,9 +410,10 @@ export async function checkExtension(id) {
 
 /** Política de dominios de la extensión dueña de un capítulo "mf:" (para imágenes por proxy). */
 /** Dominios autorizados de una extensión (solo JSON); undefined = extensión HTML (sin límite). */
-export const extHosts = (ext) => (ext?.type === 'manifest' && ext.manifest ? hostPolicy(ext.manifest) : undefined);
+export const extHosts = (ext) => (ext?.type === 'mangadex' ? MD_HOSTS : ext?.type === 'manifest' && ext.manifest ? hostPolicy(ext.manifest) : undefined);
 
 export function chapterHosts(url, extId) {
+  if (isMd(url)) return MD_HOSTS;
   if (!/^mf:/.test(url || '')) return undefined;
   const ext = extensionForUrl(url, extId);
   return ext?.manifest ? hostPolicy(ext.manifest) : undefined;

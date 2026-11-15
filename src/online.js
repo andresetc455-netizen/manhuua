@@ -52,7 +52,7 @@ export async function followSeries(ext, sourceUrl, detail, { seriesId } = {}) {
       put.push(upd);
       return;
     }
-    const ch = { id: uid(), seriesId: series.id, sourceId: ext.id, sourceUrl, sourceChapterId: c.remoteId, link: c.link || undefined, title: c.title || `Capítulo ${c.number ?? k + 1}`, number: c.number ?? null, url: c.url, date: c.date || null, dateText: c.dateText || null, online: true, pageCount: c.images?.length || null, remotePages: c.images?.length ? c.images : null, addedAt: Date.now() + k };
+    const ch = { id: uid(), seriesId: series.id, sourceId: ext.id, sourceUrl, sourceChapterId: c.remoteId, link: c.link || undefined, ...(c.group ? { group: c.group } : {}), ...(c.language ? { language: c.language } : {}), ...(c.volume ? { volume: c.volume } : {}), title: c.title || `Capítulo ${c.number ?? k + 1}`, number: c.number ?? null, url: c.url, date: c.date || null, dateText: c.dateText || null, online: true, pageCount: c.images?.length || null, remotePages: c.images?.length ? c.images : null, addedAt: Date.now() + k };
     byUrl.set(key, ch); idByUrl.set(key, ch.id); put.push(ch); added++;
   });
   await write(['series', 'chapters'], (o) => { o.series.put(series); put.forEach((c) => o.chapters.put(c)); });
@@ -204,7 +204,7 @@ export function legacyCandidates(series, chapters, installed) {
 export async function resolvePages(ch, { force = false } = {}) {
   const fresh = ch.remotePages?.length && (!ch.fetchedAt || Date.now() - ch.fetchedAt < FRESH_MS);
   if (fresh && !force) return ch.remotePages;
-  if (/^mf:/.test(ch.url || '')) {
+  if (/^(mf|md):/.test(ch.url || '')) {
     let images;
     try { images = await chapterImages(ch.url, ch.sourceId); }
     catch (e) { throw Object.assign(new Error(e.message), { diag: e.diag }); }

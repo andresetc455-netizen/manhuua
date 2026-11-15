@@ -9,7 +9,7 @@ import { followSeries, normUrl } from '../online.js';
 import { linkWorks, splitWorks } from '../unify.js';
 import { updateSeries } from '../library.js';
 import { Icon, Cover, BgCover, Favicon, go } from '../ui.jsx';
-import { DiagBox } from './Extension.jsx';
+import { DiagBox, MdCredit, MdLangPick, chOrigin } from './Extension.jsx';
 
 const fmtDate = (c) => (c.date ? new Date(c.date + 'T12:00:00').toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' }) : c.dateText || '');
 const readWork = (k) => { try { return JSON.parse(sessionStorage.getItem('mh.work:' + k)); } catch { return null; } };
@@ -20,6 +20,7 @@ export default function WorkView({ workKey }) {
   const [sel, setSel] = useState('');
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
+  const [langs, setLangs] = useState(null); // idioma de lectura elegido (fuentes que lo permiten, p. ej. MangaDex)
   const jobs = useDownloads();
   const srcs = (work?.sources || []).map((s) => ({ ...s, ext: getExtension(s.extId) })).filter((s) => s.ext);
 
@@ -35,12 +36,12 @@ export default function WorkView({ workKey }) {
     setDet(Object.fromEntries(srcs.map((s) => [s.key, { state: 'loading' }])));
     srcs.forEach((s) => {
       if (!isEnabled(s.ext)) return setDet((p) => ({ ...p, [s.key]: { state: 'error', label: 'Desactivada' } }));
-      seriesDetail(s.ext, s.item.url, s.item)
+      seriesDetail(s.ext, s.item.url, s.item, s.ext.type === 'mangadex' && langs ? { langs } : {})
         .then((d) => { const c = classify(d.diag); setDet((p) => ({ ...p, [s.key]: d.chapters.length ? { state: 'ok', d } : { state: 'error', d, label: c.state === 'ok' || c.state === 'extraction' ? 'sin capítulos' : c.label } })); })
         .catch((e) => setDet((p) => ({ ...p, [s.key]: { state: 'error', label: e.message } })));
     });
   };
-  useEffect(load, [workKey, work?.sources?.length]); // eslint-disable-line
+  useEffect(load, [workKey, work?.sources?.length, langs?.join()]); // eslint-disable-line
   // Fuente elegida: la última usada en la biblioteca o, si no, la primera de la lista que responda
   // (en orden de la lista, no la que conteste antes). Lo que elija el usuario no se cambia.
   const [picked, setPicked] = useState(false);
@@ -127,6 +128,7 @@ export default function WorkView({ workKey }) {
           </div>
           {genres.length > 0 && <div className="genres">{genres.map((g) => <span key={g}>{g}</span>)}</div>}
           {desc && <p className="desc">{desc}</p>}
+          <MdCredit d={okd.find((x) => x.ids?.mangadex)} />
           <div className="row">
             {d?.chapters[0] && <button className="btn primary" disabled={!!busy} onClick={() => read(resume || d.chapters[0])}><Icon n="book" size={16} /> {resume ? `Continuar: ${resume.title}` : 'Comenzar a leer'}</button>}
             {pending.length > 0 && <button className="btn" onClick={() => download(pending)}><Icon n="down" size={16} /> Descargar {pending.length === d.chapters.length ? 'todo' : `${pending.length} faltantes`}</button>}
@@ -167,10 +169,11 @@ export default function WorkView({ workKey }) {
       {cur && d && (
         <>
           <h3 className="sec">Capítulos en {cur.ext.name} <span className="muted small">({d.chapters.length})</span></h3>
+          <MdLangPick ext={cur.ext} d={d} value={langs?.join(',')} onChange={setLangs} />
           <ul className="chapters">
             {[...d.chapters].reverse().map((c) => {
               const l = local(c), p = l && lib.prog.get(l.id), have = downloaded(c), q = queued.has(c.url);
-              const state = [fmtDate(c), have ? 'descargado' : q ? 'en cola' : '', p?.done ? 'leído' : p ? `pág. ${p.page + 1}/${p.total}` : ''].filter(Boolean).join(' · ');
+              const state = [chOrigin(c), fmtDate(c), have ? 'descargado' : q ? 'en cola' : '', p?.done ? 'leído' : p ? `pág. ${p.page + 1}/${p.total}` : ''].filter(Boolean).join(' · ');
               return (
                 <li key={c.url} className={(p?.done ? 'read' : '') + (l && l.id === lib.series?.lastChapterId ? ' reading' : '')}>
                   <button className="ch-btn" onClick={() => read(c)} disabled={!!busy} title="Leer">
